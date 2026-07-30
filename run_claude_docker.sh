@@ -88,6 +88,64 @@ SCRIPT_DIR=$(__resolve_dir)
 IS_DARWIN=0
 [[ "$(uname -s)" == "Darwin" ]] && IS_DARWIN=1
 
+# Container engine. `docker` keeps the original behaviour byte-for-byte;
+# `podman` selects the rootless-podman path used on Fedora/RHEL-family hosts
+# where Docker is not installed and sysbox-runc does not exist.
+#
+# What the podman path changes, and why:
+#
+#   * No --runtime=sysbox-runc. Sysbox is a Docker-only OCI runtime shim
+#     (it needs sysbox-mgr/sysbox-fs daemons and a rootful dockerd). There
+#     is no podman equivalent. Rootless podman's own user namespace already
+#     puts the host filesystem out of reach, which is the isolation property
+#     this sandbox actually depends on.
+#
+#   * No Docker-in-Docker. Without sysbox a nested dockerd cannot mount
+#     overlay2, so SANDBOX_HAS_DIND=0 and the DinD volume is not created or
+#     mounted. start_dockerd.sh self-skips on that flag.
+#
+#   * --userns=keep-id:uid=<IMAGE_UID>. Rootless podman maps the invoking
+#     user to container root by default, which would land every file the
+#     agent writes to /workspace under a high subuid the host user cannot
+#     read. keep-id pins the invoker onto the image's baked `claude` uid
+#     instead, so /workspace files come out owned by the invoking user.
+#     Container uid 0 still resolves through the subuid range, so the
+#     image's passwordless sudo keeps working.
+#
+#   * HOST_UID / HOST_GID are NOT forwarded. keep-id has already placed us
+#     on the right uid before the entrypoint runs, and the usermod/groupmod
+#     in uid-fixup-entrypoint.sh would need real root. Leaving both unset
+#     makes that entrypoint a no-op that falls through to `exec gosu claude`.
+#
+#   * Host services are reached over a pasta port forward rather than
+#     host.docker.internal — see resolve_host_bind_ip below.
+ENGINE="${CLAUDE_SANDBOX_ENGINE:-docker}"
+IS_PODMAN=0
+[[ "$ENGINE" == *podman* ]] && IS_PODMAN=1
+
+if ! command -v "$ENGINE" >/dev/null 2>&1; then
+    echo "CRITICAL ERROR: container engine '$ENGINE' not found on PATH." >&2
+    echo "                Set CLAUDE_SANDBOX_ENGINE to docker or podman." >&2
+    exit 1
+fi
+
+# The uid/gid baked into the image for the `claude` user (docker/Dockerfile).
+# Only consulted on the podman path, to build the keep-id mapping.
+SANDBOX_IMAGE_UID="${CLAUDE_SANDBOX_IMAGE_UID:-1015}"
+
+# Image reference. podman stores locally-built images under the `localhost/`
+# prefix and runs with short-name-mode="enforcing" on Fedora/RHEL hosts, so
+# qualify it there. Docker keeps the bare tag it has always used.
+if [[ "$IS_PODMAN" == "1" ]]; then
+    SANDBOX_IMAGE_REF="localhost/claude-sandbox:${DOCKER_IMAGE_VERSION}"
+else
+    SANDBOX_IMAGE_REF="claude-sandbox:${DOCKER_IMAGE_VERSION}"
+fi
+
+# Extra flags accumulated for the podman path (pasta port forwards).
+PODMAN_NET_FLAGS=()
+PASTA_FORWARDS=()
+
 # Pick the IP that host-side services (fiss-mcp, vertex_proxy) should bind
 # to so the container can reach them via host.docker.internal.
 #
@@ -101,8 +159,22 @@ IS_DARWIN=0
 # so 127.0.0.1 is reachable from the container without exposing the
 # listener to any external interface. There is no docker bridge gateway
 # on the host to inspect.
+#
+# rootless podman: bind to 127.0.0.1 and reach it from the container through a
+# pasta port forward (`--network=pasta:-T,<port>`), which maps that port on the
+# container's loopback to the same port on the host's loopback. Measured on
+# this host with a loopback-only listener:
+#     pasta -T <port>  -> reachable
+#     host.containers.internal            -> connection refused
+#     host.docker.internal:host-gateway   -> connection refused
+# Both names resolve to a non-loopback host address, so they cannot see a
+# listener bound to 127.0.0.1. Widening the bind to reach them would put the
+# listener on an external interface, which is exactly what the Docker path
+# avoids by using the bridge gateway. The pasta forward keeps the listener
+# strictly on loopback — a tighter result than the Docker path, not a
+# looser one. register_pasta_forward() below records the ports to forward.
 resolve_host_bind_ip() {
-    if [[ "$IS_DARWIN" == "1" ]]; then
+    if [[ "$IS_DARWIN" == "1" || "$IS_PODMAN" == "1" ]]; then
         printf '127.0.0.1'
         return 0
     fi
@@ -115,6 +187,25 @@ resolve_host_bind_ip() {
         return 1
     fi
     printf '%s' "$ip"
+}
+
+# Record a host port that the container must be able to reach, and set
+# REGISTERED_HOSTNAME to the hostname the container should use to reach it.
+# On the podman path this queues a pasta forward and yields 127.0.0.1;
+# elsewhere it yields host.docker.internal, preserving the original URLs.
+#
+# Sets a global instead of printing, and must NOT be called via $(...):
+# command substitution runs in a subshell, so the PASTA_FORWARDS append would
+# be discarded and no forward would ever reach the run command line.
+REGISTERED_HOSTNAME=""
+register_pasta_forward() {
+    local port="$1"
+    if [[ "$IS_PODMAN" == "1" ]]; then
+        PASTA_FORWARDS+=("$port")
+        REGISTERED_HOSTNAME="127.0.0.1"
+    else
+        REGISTERED_HOSTNAME="host.docker.internal"
+    fi
 }
 PERSISTENT_STATE_DIR="${SCRIPT_DIR}/claude-sandbox-persistent-state${INSTANCE_SUFFIX}"
 SHARED_STATE_DIR="${SCRIPT_DIR}/claude-sandbox-shared"
@@ -270,13 +361,27 @@ done
 # Refuse to launch if this instance's DinD volume is already in use — two
 # dockerds writing the same /var/lib/docker corrupt the store.
 DIND_VOLUME="claude-dind-lib${INSTANCE_SUFFIX}"
-in_use=$(docker ps -q --filter "volume=${DIND_VOLUME}")
-if [ -n "$in_use" ]; then
-    echo "Error: instance '${CLAUDE_SANDBOX_INSTANCE}' is already running:" >&2
-    docker ps --filter "volume=${DIND_VOLUME}" \
-        --format '  {{.ID}}  {{.Names}}  ({{.Status}})' >&2
-    echo "Pick a different CLAUDE_SANDBOX_INSTANCE to launch a parallel sandbox." >&2
-    exit 1
+if [[ "$IS_PODMAN" == "1" ]]; then
+    # No DinD on the podman path, so there is no shared /var/lib/docker to
+    # corrupt. Guard on the container name instead — that is what actually
+    # collides between two launches of the same instance.
+    in_use=$("$ENGINE" ps -q --filter "name=^${CONTAINER_NAME}$")
+    if [ -n "$in_use" ]; then
+        echo "Error: instance '${CLAUDE_SANDBOX_INSTANCE}' is already running:" >&2
+        "$ENGINE" ps --filter "name=^${CONTAINER_NAME}$" \
+            --format '  {{.ID}}  {{.Names}}  ({{.Status}})' >&2
+        echo "Pick a different CLAUDE_SANDBOX_INSTANCE to launch a parallel sandbox." >&2
+        exit 1
+    fi
+else
+    in_use=$(docker ps -q --filter "volume=${DIND_VOLUME}")
+    if [ -n "$in_use" ]; then
+        echo "Error: instance '${CLAUDE_SANDBOX_INSTANCE}' is already running:" >&2
+        docker ps --filter "volume=${DIND_VOLUME}" \
+            --format '  {{.ID}}  {{.Names}}  ({{.Status}})' >&2
+        echo "Pick a different CLAUDE_SANDBOX_INSTANCE to launch a parallel sandbox." >&2
+        exit 1
+    fi
 fi
 
 # Build the mount args based on layout. Later mounts shadow earlier ones, so
@@ -314,8 +419,13 @@ MOUNTS+=(
   # host's ~/.claude/.credentials.json directly broke rename and
   # silently dropped post-/login tokens.
   -v "${CLAUDE_SANDBOX_CONTEXT_DIR}:/context"
-  -v "${DIND_VOLUME}:/var/lib/docker"
 )
+# The DinD volume only exists to give a nested dockerd its own
+# /var/lib/docker. There is no nested dockerd on the podman path, so mounting
+# it would just create a stray named volume.
+if [[ "$IS_PODMAN" != "1" ]]; then
+  MOUNTS+=( -v "${DIND_VOLUME}:/var/lib/docker" )
+fi
 
 # Optional caller-supplied read-only mounts. Space-separated list of
 # host DIRECTORIES in CLAUDE_SANDBOX_RO_MOUNTS — no container path; the
@@ -534,7 +644,8 @@ if [[ "$FISS_MCP_ENABLED" == "1" ]]; then
     exit 1
   fi
 
-  FISS_MCP_URL_FOR_CONTAINER="http://host.docker.internal:${HOST_FISS_PORT}${HOST_FISS_PATH}"
+  register_pasta_forward "${HOST_FISS_PORT}"
+  FISS_MCP_URL_FOR_CONTAINER="http://${REGISTERED_HOSTNAME}:${HOST_FISS_PORT}${HOST_FISS_PATH}"
   echo "fiss-mcp: host server pid=${HOST_FISS_PID} url=${FISS_MCP_URL_FOR_CONTAINER}"
 fi
 
@@ -632,7 +743,8 @@ if [[ "$VERTEX_ENABLED" == "1" ]]; then
   # No /v1 suffix: Anthropic-SDK convention (and headroom's ANTHROPIC_TARGET_API_URL)
   # is base URL only — clients append /v1/messages. The proxy ignores the path
   # anyway, so it's purely about not confusing headroom's URL builder.
-  VERTEX_PROXY_URL_FOR_CONTAINER="http://host.docker.internal:${HOST_VERTEX_PORT}"
+  register_pasta_forward "${HOST_VERTEX_PORT}"
+  VERTEX_PROXY_URL_FOR_CONTAINER="http://${REGISTERED_HOSTNAME}:${HOST_VERTEX_PORT}"
   echo "vertex_proxy: host server pid=${HOST_VERTEX_PID} url=${VERTEX_PROXY_URL_FOR_CONTAINER}"
 fi
 
@@ -690,7 +802,62 @@ if [[ -n "${CLAUDE_SANDBOX_SHM_SIZE:-}" ]]; then
   SHM_FLAGS=(--shm-size="${CLAUDE_SANDBOX_SHM_SIZE}")
 fi
 
-if [[ "$IS_DARWIN" == "1" ]]; then
+# Memory / CPU ceiling. Rootless podman can enforce these because cgroup v2
+# delegates the `memory` controller to the user slice; verified on this host
+# (memory.max reads back exactly). Applied on the Docker path too — same flags.
+LIMIT_FLAGS=()
+if [[ -n "${CLAUDE_SANDBOX_MEMORY:-}" ]]; then
+  # --memory-swap equal to --memory disables swap beyond the limit, so the
+  # ceiling is a real ceiling rather than a soft push into swap.
+  LIMIT_FLAGS+=(--memory="${CLAUDE_SANDBOX_MEMORY}" --memory-swap="${CLAUDE_SANDBOX_MEMORY}")
+fi
+if [[ -n "${CLAUDE_SANDBOX_CPUS:-}" ]]; then
+  LIMIT_FLAGS+=(--cpus="${CLAUDE_SANDBOX_CPUS}")
+fi
+
+if [[ "$IS_PODMAN" == "1" ]]; then
+  YEL=$'\033[1;33m'; RST=$'\033[0m'
+  echo "${YEL}podman host: rootless userns isolation, no sysbox-runc, no DinD.${RST}"
+  RUNTIME_FLAG=()
+
+  # Pin the invoking user onto the image's `claude` uid so /workspace files
+  # land owned by the invoker on the host instead of an unreadable subuid.
+  RUNTIME_FLAG+=(--userns="keep-id:uid=${SANDBOX_IMAGE_UID},gid=${SANDBOX_IMAGE_UID}")
+
+  # GPU passthrough under rootless podman needs a CDI spec
+  # (/etc/cdi/nvidia.yaml, generated by `nvidia-ctk cdi generate`) and is
+  # requested with --device rather than --gpus. Opt-in only: the sandbox has
+  # no GPU workload by default, and silently failing over would be worse
+  # than not offering it.
+  if [[ "${CLAUDE_SANDBOX_GPU:-0}" == "1" ]]; then
+    if [[ -e /etc/cdi/nvidia.yaml || -e /var/run/cdi/nvidia.yaml ]]; then
+      GPU_FLAGS=(--device nvidia.com/gpu=all)
+      HAVE_GPU=1
+      echo "${YEL}podman: forwarding all NVIDIA GPUs via CDI.${RST}"
+    else
+      echo "${YEL}WARNING: CLAUDE_SANDBOX_GPU=1 but no CDI spec found.${RST}"
+      echo "${YEL}Generate one with: sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml${RST}"
+      echo "${YEL}Continuing WITHOUT GPU passthrough.${RST}"
+    fi
+  fi
+
+  # Queue the pasta forwards collected by register_pasta_forward(). Each
+  # `-T <port>` maps that port on the container's loopback to the same port
+  # on the host's loopback, which is where the host services are bound.
+  #
+  # Syntax is `pasta:<opt>,<opt>,...` — a COLON separates the network name
+  # from its options, and commas separate the option tokens after that. Each
+  # `-T,<port>` pair therefore becomes two argv tokens to pasta.
+  if (( ${#PASTA_FORWARDS[@]} )); then
+    pasta_opts=""
+    for p in "${PASTA_FORWARDS[@]}"; do
+      [[ -n "$pasta_opts" ]] && pasta_opts+=","
+      pasta_opts+="-T,${p}"
+    done
+    PODMAN_NET_FLAGS=(--network="pasta:${pasta_opts}")
+    echo "podman: pasta forwards to host loopback -> ${PASTA_FORWARDS[*]}"
+  fi
+elif [[ "$IS_DARWIN" == "1" ]]; then
   YEL=$'\033[1;33m'; RST=$'\033[0m'
   echo "${YEL}macOS host: no sysbox-runc (using default runc), no GPU passthrough, no DinD.${RST}"
   RUNTIME_FLAG=()
@@ -742,21 +909,32 @@ fi
 # "${arr[@]}" reference when the array is empty under `set -u`. RUNTIME_FLAG
 # and GPU_FLAGS are both empty on Darwin (no sysbox, no NVIDIA), so the
 # guard is required there; harmless on Linux.
-docker run --rm -it \
+#
+# On the podman path: HOST_UID / HOST_GID are deliberately passed empty.
+# --userns=keep-id has already put us on the image's claude uid before the
+# entrypoint runs, and uid-fixup-entrypoint.sh's usermod/groupmod would need
+# real root. Empty values make that entrypoint skip both remaps and the
+# chown -R, falling straight through to `exec gosu claude`.
+# host.docker.internal is still declared so anything in the container that
+# hardcodes the name resolves rather than erroring; host services are reached
+# through the pasta loopback forward instead (see resolve_host_bind_ip).
+"$ENGINE" run --rm -it \
   --name "${CONTAINER_NAME}" \
   "${MOUNTS[@]}" \
   --add-host=host.docker.internal:host-gateway \
+  ${PODMAN_NET_FLAGS[@]+"${PODMAN_NET_FLAGS[@]}"} \
   ${RUNTIME_FLAG[@]+"${RUNTIME_FLAG[@]}"} \
   ${SHM_FLAGS[@]+"${SHM_FLAGS[@]}"} \
+  ${LIMIT_FLAGS[@]+"${LIMIT_FLAGS[@]}"} \
   ${GPU_FLAGS[@]+"${GPU_FLAGS[@]}"} \
-  -e HOST_UID="$(id -u)" \
-  -e HOST_GID="$(id -g)" \
+  -e HOST_UID="$([[ "$IS_PODMAN" == "1" ]] || id -u)" \
+  -e HOST_GID="$([[ "$IS_PODMAN" == "1" ]] || id -g)" \
   -e HEADROOM="${HEADROOM:-0}" \
   -e HEADROOM_PORT="${HEADROOM_PORT:-8787}" \
   -e CLAUDE_NOTIFY_EMAIL="${CLAUDE_NOTIFY_EMAIL:-}" \
   -e CLAUDE_NOTIFY_FROM="${CLAUDE_NOTIFY_FROM:-claude-sandbox}" \
   -e CLAUDE_NOTIFY_HOSTNAME="${CLAUDE_NOTIFY_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}" \
-  -e SANDBOX_HAS_DIND="$([[ "${HAVE_GPU}" == "1" || "${IS_DARWIN}" == "1" ]] && echo 0 || echo 1)" \
+  -e SANDBOX_HAS_DIND="$([[ "${HAVE_GPU}" == "1" || "${IS_DARWIN}" == "1" || "${IS_PODMAN}" == "1" ]] && echo 0 || echo 1)" \
   -e FISS_MCP="${FISS_MCP_ENABLED}" \
   -e FISS_MCP_ALLOW_WRITES="${FISS_MCP_ALLOW_WRITES:-0}" \
   -e FISS_MCP_URL="${FISS_MCP_URL_FOR_CONTAINER}" \
@@ -765,5 +943,5 @@ docker run --rm -it \
   -e CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-}" \
   -e ANTHROPIC_TARGET_API_URL="${VERTEX_PROXY_URL_FOR_CONTAINER}" \
   -w /workspace \
-  claude-sandbox:${DOCKER_IMAGE_VERSION} /home/claude/start_script.sh "$@"
+  "${SANDBOX_IMAGE_REF}" /home/claude/start_script.sh "$@"
 

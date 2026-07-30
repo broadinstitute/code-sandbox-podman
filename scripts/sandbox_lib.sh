@@ -2,6 +2,12 @@
 # scripts/sandbox_lib.sh — shared helpers for list_sandboxes.sh and start_sandbox.sh.
 # Source, don't execute. No side effects on source.
 
+# Container engine, matching run_claude_docker.sh. `docker` unless the caller
+# selected podman (rootless-podman hosts have no docker binary at all, so the
+# `docker ps` calls below would otherwise fail silently and report every
+# sandbox as not running).
+SB_ENGINE="${CLAUDE_SANDBOX_ENGINE:-docker}"
+
 # Cross-platform mtime in seconds since epoch.
 # GNU stat first (Linux is the primary host); fall back to BSD stat (macOS).
 # Note: `stat -f` on Linux means --file-system and exits 0 with garbage banner
@@ -284,7 +290,7 @@ sb_collect_env_workdirs() {
 # Is a sandbox area currently running? Echoes container id if so, else nothing.
 sb_running_cid() {
     local instance=$1
-    docker ps --filter "name=^claude-sandbox-${instance}$" -q 2>/dev/null
+    "$SB_ENGINE" ps --filter "name=^claude-sandbox-${instance}$" -q 2>/dev/null
 }
 
 # Print, one per line, the area names of every running claude-sandbox
@@ -292,6 +298,6 @@ sb_running_cid() {
 # read this once rather than calling sb_running_cid in a loop (each docker
 # fork is ~50-150 ms).
 sb_running_areas() {
-    docker ps --filter ancestor=claude-sandbox --format '{{.Names}}' 2>/dev/null \
+    "$SB_ENGINE" ps --filter ancestor=claude-sandbox --format '{{.Names}}' 2>/dev/null \
         | sed -n 's/^claude-sandbox-\(.*\)$/\1/p'
 }

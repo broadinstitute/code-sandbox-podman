@@ -18,11 +18,24 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OS_KEY="${SETUP_HOST_OS:-}"
 if [[ -z "$OS_KEY" ]]; then
   case "$(uname -s)" in
-    Linux)  OS_KEY=linux ;;
+    Linux)
+      # setup_host_linux.sh is an apt path: it installs Docker CE 28.x,
+      # sysbox-runc and postfix. On a host that has podman and no docker --
+      # RHEL/Fedora family, typically -- that is both unusable (no apt) and
+      # wrong (sysbox is Docker-only; there is no podman equivalent). Route
+      # those hosts to the verify-only podman helper instead.
+      if ! command -v apt-get >/dev/null 2>&1 \
+         && command -v podman >/dev/null 2>&1 \
+         && ! command -v docker >/dev/null 2>&1; then
+        OS_KEY=podman
+      else
+        OS_KEY=linux
+      fi
+      ;;
     Darwin) OS_KEY=macos ;;
     *)
       echo "setup_host.sh: unsupported host OS '$(uname -s)'." >&2
-      echo "                Supported: Linux (Debian/Ubuntu), macOS." >&2
+      echo "                Supported: Linux (Debian/Ubuntu apt, or rootless podman), macOS." >&2
       exit 1
       ;;
   esac

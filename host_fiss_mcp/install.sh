@@ -21,17 +21,42 @@ REPO_URL="https://github.com/broadinstitute/fiss-mcp.git"
 FISS_MCP_REF="1.0.5"
 FISS_MCP_REF_COMMIT="ce8097b2126c17166eab565eea5fad8ca9cb5295"
 
-# Python 3.10+ check (fiss-mcp requires >=3.10).
+# Interpreter version for the venv.
+#
+# fiss-mcp declares requires-python >=3.10, but its dependency `firecloud`
+# (0.16.x) is a legacy setup.py package and terra-mcp's own classifiers stop
+# at 3.12. Hosts whose system python has moved ahead of that — Fedora 44 /
+# Nobara 44 ship 3.14 — cannot build the dependency tree. Pin the venv to a
+# known-good interpreter instead of inheriting whatever `python3` happens to
+# be, and let uv fetch it if the host does not have it.
+#
+# Override with FISS_MCP_PYTHON=3.11 etc. if a specific version is needed.
+FISS_MCP_PYTHON="${FISS_MCP_PYTHON:-3.12}"
+
+# uv is preferred: it resolves and can download the pinned interpreter, so the
+# install does not depend on the host having python3.12 preinstalled or on the
+# python3-venv package being present. Falls back to `python3 -m venv` when uv
+# is absent, which keeps the original Debian/Ubuntu path working unchanged.
+UV_BIN="$(command -v uv 2>/dev/null || true)"
 PY="${PYTHON:-python3}"
-if ! command -v "$PY" >/dev/null 2>&1; then
-  echo "host_fiss_mcp/install.sh: python3 not found on PATH" >&2
-  exit 1
-fi
-PY_VER=$("$PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-PY_MAJ=${PY_VER%%.*}; PY_MIN=${PY_VER##*.}
-if [[ "$PY_MAJ" -lt 3 ]] || { [[ "$PY_MAJ" -eq 3 ]] && [[ "$PY_MIN" -lt 10 ]]; }; then
-  echo "host_fiss_mcp/install.sh: python ${PY_VER} too old; fiss-mcp needs >=3.10" >&2
-  exit 1
+
+if [[ -z "$UV_BIN" ]]; then
+  if ! command -v "$PY" >/dev/null 2>&1; then
+    echo "host_fiss_mcp/install.sh: neither uv nor python3 found on PATH" >&2
+    exit 1
+  fi
+  PY_VER=$("$PY" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+  PY_MAJ=${PY_VER%%.*}; PY_MIN=${PY_VER##*.}
+  if [[ "$PY_MAJ" -lt 3 ]] || { [[ "$PY_MAJ" -eq 3 ]] && [[ "$PY_MIN" -lt 10 ]]; }; then
+    echo "host_fiss_mcp/install.sh: python ${PY_VER} too old; fiss-mcp needs >=3.10" >&2
+    exit 1
+  fi
+  if [[ "$PY_MAJ" -eq 3 ]] && [[ "$PY_MIN" -gt 12 ]]; then
+    echo "host_fiss_mcp/install.sh: WARNING — python ${PY_VER} is newer than" >&2
+    echo "              fiss-mcp's tested range (<=3.12) and the firecloud" >&2
+    echo "              dependency may fail to build. Install uv to get a" >&2
+    echo "              pinned ${FISS_MCP_PYTHON} venv instead." >&2
+  fi
 fi
 
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
@@ -60,13 +85,29 @@ fi
 # absent — a guard that only checked pyvenv.cfg silently skipped recreation
 # and the very next line (pip install) failed with "No such file or
 # directory". Wipe any partial venv so the create step is forced.
-if [[ ! -x "${VENV_DIR}/bin/pip" ]]; then
+#
+# On the uv path the completeness test is bin/python, not bin/pip: `uv venv`
+# deliberately does not seed pip into the venv (uv installs packages into it
+# from outside). Checking bin/pip there would wipe and recreate a perfectly
+# good venv on every run.
+if [[ -n "$UV_BIN" ]]; then
+  VENV_PROBE="${VENV_DIR}/bin/python"
+else
+  VENV_PROBE="${VENV_DIR}/bin/pip"
+fi
+
+if [[ ! -x "${VENV_PROBE}" ]]; then
   if [[ -e "${VENV_DIR}" ]]; then
     echo "host_fiss_mcp: removing incomplete venv at ${VENV_DIR}"
     rm -rf "${VENV_DIR}"
   fi
-  echo "host_fiss_mcp: creating venv at ${VENV_DIR}"
-  "$PY" -m venv "${VENV_DIR}"
+  if [[ -n "$UV_BIN" ]]; then
+    echo "host_fiss_mcp: creating venv at ${VENV_DIR} (uv, python ${FISS_MCP_PYTHON})"
+    "$UV_BIN" venv --python "${FISS_MCP_PYTHON}" "${VENV_DIR}"
+  else
+    echo "host_fiss_mcp: creating venv at ${VENV_DIR}"
+    "$PY" -m venv "${VENV_DIR}"
+  fi
 fi
 
 # Marker file lets us skip the heavy pip step on repeat runs. The marker
@@ -76,9 +117,27 @@ MARKER="${VENV_DIR}/.installed.marker"
 EXPECTED_MARKER="fiss-mcp@${FISS_MCP_REF}+${FISS_MCP_REF_COMMIT}"
 if [[ ! -f "${MARKER}" ]] || ! grep -q -x -F "${EXPECTED_MARKER}" "${MARKER}"; then
   echo "host_fiss_mcp: installing fiss-mcp + fastmcp into venv"
-  "${VENV_DIR}/bin/pip" install --quiet --upgrade pip "setuptools<80"
-  "${VENV_DIR}/bin/pip" install --quiet --no-build-isolation -e "${SRC_DIR}"
+  if [[ -n "$UV_BIN" ]]; then
+    # setuptools<80 first: firecloud builds via legacy setup.py and breaks on
+    # setuptools 80+. --no-build-isolation then makes the editable build of
+    # fiss-mcp reuse that pinned setuptools instead of pulling a fresh one.
+    "$UV_BIN" pip install --python "${VENV_DIR}/bin/python" --quiet "setuptools<80"
+    "$UV_BIN" pip install --python "${VENV_DIR}/bin/python" --quiet \
+      --no-build-isolation -e "${SRC_DIR}"
+  else
+    "${VENV_DIR}/bin/pip" install --quiet --upgrade pip "setuptools<80"
+    "${VENV_DIR}/bin/pip" install --quiet --no-build-isolation -e "${SRC_DIR}"
+  fi
   echo "${EXPECTED_MARKER}" > "${MARKER}"
+fi
+
+# Import check. The launcher only tests that venv/bin/python exists, so a venv
+# that built but cannot import terra_mcp would fail later, inside the 30-second
+# server-readiness wait, with a much less obvious error.
+if ! "${VENV_DIR}/bin/python" -c 'import terra_mcp.server' 2>/dev/null; then
+  echo "host_fiss_mcp: venv built but 'import terra_mcp.server' failed." >&2
+  "${VENV_DIR}/bin/python" -c 'import terra_mcp.server' || true
+  exit 1
 fi
 
 echo "host_fiss_mcp: ready at ${INSTALL_ROOT}"

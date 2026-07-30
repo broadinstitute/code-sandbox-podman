@@ -47,6 +47,7 @@ SAVED_SNAPSHOTS
 env.sh
 env.*.sh
 !env.example.sh
+!env.podman.example.sh
 
 # Vertex-mode activation script holds a real GCP project id. Only the
 # placeholder template is tracked.
@@ -81,3 +82,9 @@ SESSION_ARCHIVE/INDEX.md
 # CLASSIFIED.md embeds session titles + prompt snippets too — same
 # privacy reason. It's your working attribution artifact, regenerable.
 SESSION_ARCHIVE/CLASSIFIED.md
+
+# --- fork additions (rootless podman path) ---
+# uv-managed venv + pinned fiss-mcp checkout, both rebuilt by setup_host.sh.
+# The venv is not relocatable (absolute paths in pyvenv.cfg and bin/ shebangs).
+host_fiss_mcp/venv/
+host_fiss_mcp/fiss-mcp/

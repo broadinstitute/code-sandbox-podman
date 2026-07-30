@@ -110,6 +110,38 @@ Approximate image size: ~3 GB.
   only knows the Debian/Ubuntu apt path, so other distros need an adapted
   setup script.
 
+### Linux with rootless podman (no Docker, no sysbox)
+
+Set `CLAUDE_SANDBOX_ENGINE=podman` and the launcher takes a separate path.
+Use this on RHEL/Fedora-family hosts where Docker is not installed. Verified
+on Nobara 44 (Fedora 44 base) with podman 5.8.4 rootless.
+
+- **podman >= 5.0.** Needs the `keep-id:uid=` userns syntax (podman 4.3+) and
+  the pasta network backend (podman 5 default).
+- **`/etc/subuid` + `/etc/subgid`** must have a range for your user, 65536
+  wide. Add with
+  `sudo usermod --add-subuids 524288-589823 --add-subgids 524288-589823 $USER`.
+- **cgroup v2 with the `memory` controller delegated** to the user slice, if
+  you want `CLAUDE_SANDBOX_MEMORY` to be enforced rather than ignored.
+- **`uv`** (recommended) so the host fiss-mcp venv gets a pinned Python 3.12.
+- Run `./setup_host.sh` as usual — it auto-dispatches to
+  `scripts/setup_host_podman.sh` when there is no `apt-get`, podman is
+  present, and docker is not. That helper only **verifies**; it installs no
+  packages and changes no system state.
+- Build with `make ENGINE=podman` (or export `CLAUDE_SANDBOX_ENGINE=podman`).
+
+What differs from the Docker path, and why:
+
+| Concern | Docker path | podman path |
+|---|---|---|
+| Runtime | `--runtime=sysbox-runc` | none. Sysbox is a Docker-only runtime shim needing rootful `dockerd` plus its own daemons; no podman equivalent exists. Rootless podman's user namespace already puts the host filesystem out of reach, which is the isolation property this sandbox depends on. |
+| UID mapping | `usermod` in `uid-fixup-entrypoint.sh`, driven by `HOST_UID`/`HOST_GID` | `--userns=keep-id:uid=1015,gid=1015` pins the invoker onto the image's baked `claude` uid. `HOST_UID`/`HOST_GID` are passed empty so the entrypoint no-ops through to `exec gosu claude`. Without this, rootless podman maps the invoker to container root and everything written to `/workspace` lands under a subuid the host user cannot read. |
+| Docker-in-Docker | works under sysbox | **unavailable.** `SANDBOX_HAS_DIND=0`; no DinD volume is created or mounted. Plain runc cannot mount overlay2 for a nested dockerd. |
+| Reaching host services (fiss-mcp, vertex_proxy) | bind to the docker bridge gateway, container connects to `host.docker.internal` | bind to `127.0.0.1`; container connects to `127.0.0.1` through a pasta forward (`--network=pasta:-T,<port>`). Measured: pasta `-T` reaches a loopback-bound listener, while both `host.containers.internal` and `host.docker.internal:host-gateway` get connection-refused because they resolve to a non-loopback host address. The forward keeps the listener strictly on loopback — tighter than the bridge-gateway bind, not looser. |
+| GPU | `--gpus all` on plain runc | opt-in via `CLAUDE_SANDBOX_GPU=1`, needs a CDI spec (`sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml`) and uses `--device nvidia.com/gpu=all`. Off by default. |
+| Mail relay | host postfix, configured by `setup_host_linux.sh` | not set up. Leave `CLAUDE_NOTIFY_EMAIL` unset; the notify hooks no-op and `start_script.sh` tolerates postfix failing to start. |
+| Login/group step | requires log out + log back in for the `docker` group | none — rootless podman uses no group membership. |
+
 ### macOS
 
 - macOS 12 (Monterey) or newer, Apple Silicon or Intel.

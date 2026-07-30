@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Start the postfix service for mail notifications:
-service postfix start
+# Start the postfix service for mail notifications.
+#
+# Non-fatal. Mail is optional (the notify hooks no-op when CLAUDE_NOTIFY_EMAIL
+# is unset) and postfix's relay target is the host's MTA, which may not exist.
+# More importantly this script runs as the unprivileged `claude` user, so
+# under rootless podman `service postfix start` cannot bind and exits
+# non-zero — with `set -e` that would abort startup before claude ever runs.
+# Swallow the failure and keep going.
+if ! service postfix start 2>/dev/null; then
+  echo "postfix: not started (mail notifications unavailable) — continuing"
+fi
 
-# Start the docker service so we can run docker in a docker for tests:
+# Start the docker service so we can run docker in a docker for tests.
+# Self-skips when SANDBOX_HAS_DIND=0, which the podman launcher always sets
+# (no sysbox-runc equivalent exists, so a nested dockerd cannot mount overlay2).
 ~/start_dockerd.sh
 
 # Vertex routing signal (Option B). When the host launcher spawned

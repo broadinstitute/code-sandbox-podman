@@ -22,7 +22,7 @@ source "$__LS_SCRIPT_DIR/scripts/sandbox_lib.sh"
 CIDS=()
 while IFS= read -r cid; do
     [ -n "$cid" ] && CIDS+=("$cid")
-done < <(docker ps --filter ancestor=claude-sandbox --format '{{.ID}}')
+done < <("${CLAUDE_SANDBOX_ENGINE:-docker}" ps --filter ancestor=claude-sandbox --format '{{.ID}}')
 
 if [ "${#CIDS[@]}" -eq 0 ]; then
     echo "No running claude-sandbox instances."
@@ -60,7 +60,7 @@ for cid in "${CIDS[@]}"; do
     else
         instance="(unnamed: $raw_name)"
     fi
-    status=$(docker ps --filter id="$cid" --format '{{.Status}}')
+    status=$("${CLAUDE_SANDBOX_ENGINE:-docker}" ps --filter id="$cid" --format '{{.Status}}')
     image=$(docker inspect --format '{{.Config.Image}}' "$cid")
 
     workspace=$(mount_source_for "$cid" /workspace)

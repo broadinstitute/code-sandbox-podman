@@ -1,6 +1,13 @@
-FROM eclipse-temurin:17-jdk AS temurin
+# Base images are FULLY QUALIFIED (docker.io/library/...) rather than short
+# names. Docker resolves bare `node:22-slim` to Docker Hub implicitly, but
+# podman on Fedora/RHEL-family hosts ships
+# /etc/containers/registries.conf with short-name-mode="enforcing" and a
+# multi-registry search list, so a short name makes it stop and ask which
+# registry to use — which hangs (then fails) a non-interactive build.
+# Qualifying is a no-op for Docker and required for podman.
+FROM docker.io/library/eclipse-temurin:17-jdk AS temurin
 
-FROM node:22-slim
+FROM docker.io/library/node:22-slim
 
 ################################################################################
 

@@ -1,0 +1,236 @@
+# Fork notes — rootless podman on Fedora/Nobara
+
+Fork of [jonn-smith/claude-docker-sandbox](https://github.com/jonn-smith/claude-docker-sandbox)
+(`upstream` remote), branch `podman-nobara`, forked at upstream commit `b969b39`.
+
+Upstream is Docker-only and assumes a Debian/Ubuntu host: `setup_host.sh` installs
+Docker CE pinned to 28.x, sysbox-runc, and postfix via `apt`. This fork runs the same
+sandbox under **rootless podman** with no Docker, no sysbox, and no MTA.
+
+Every change is gated on `CLAUDE_SANDBOX_ENGINE`, so the Docker path is byte-for-byte
+unchanged and upstream rebases stay tractable.
+
+## Host it was built and verified on
+
+| | |
+|---|---|
+| OS | Nobara 44 (Fedora 44 base), no `apt` |
+| Engine | podman 5.8.4, rootless, netavark + pasta |
+| Image store | `/mnt/data/containers/storage` |
+| subuid/subgid | `cox:524288:65536` |
+| SELinux | disabled (so no `:z`/`:Z` relabeling needed; an enforcing host will need it) |
+| cgroups | v2, systemd, `memory` delegated to the user slice |
+| Host uid/gid | 1000:1001 |
+| Python | 3.14.6 system-wide — too new for fiss-mcp's deps |
+
+## What changed and why
+
+### 1. No sysbox-runc
+
+Sysbox is a Docker-only OCI runtime shim: it needs `sysbox-mgr`/`sysbox-fs` daemons and
+a rootful `dockerd`. There is no podman equivalent. Rootless podman's user namespace
+already puts the host filesystem out of reach, which is the isolation property this
+sandbox actually depends on — verified below.
+
+### 2. UID mapping: `--userns=keep-id:uid=1015,gid=1015`
+
+This is the crux of the port. Rootless podman maps the invoking user to *container root*
+by default, so anything the agent wrote to `/workspace` would land on the host owned by a
+subuid in the 524288+ range — unreadable by the invoking user. `keep-id:uid=1015` pins the
+invoker onto the image's baked `claude` uid instead.
+
+Measured mapping inside the container:
+
+```
+container 0..1014  -> subuid 1..1015     (so uid 0 is mapped: sudo still works)
+container 1015     -> host uid 1000      (cox)
+container 1016+    -> subuid 1016+
+```
+
+`HOST_UID`/`HOST_GID` are passed **empty** on this path, because the remap has already
+happened by mapping rather than by `usermod`.
+
+### 3. `uid-fixup-entrypoint.sh` — early exit when already unprivileged
+
+The only change to a file that both engines share, and it fixes a hard failure rather
+than a cosmetic one. Upstream's entrypoint ends with `exec gosu claude "$@"`. Under
+`keep-id` the container starts as uid 1015 with no capabilities, and `gosu` calls
+`setgroups(2)`, which needs `CAP_SETGID`:
+
+```
+error: failed switching to "claude": operation not permitted
+```
+
+That happens **even though the target uid equals the current uid**, so `gosu` cannot be
+treated as a no-op. The entrypoint now execs the command directly when `id -u` is not 0.
+Root-start (Docker) behaviour is untouched.
+
+### 4. No Docker-in-Docker
+
+`SANDBOX_HAS_DIND=0`; the DinD volume is neither created nor mounted. Plain runc cannot
+mount overlay2 for a nested dockerd. `start_dockerd.sh` already self-skips on that flag,
+so no change was needed there.
+
+### 5. Host services over a pasta forward, not `host.docker.internal`
+
+Upstream binds host fiss-mcp to the Docker bridge gateway and has the container reach it
+at `host.docker.internal`. Neither works here. Measured against a loopback-bound listener
+on this host:
+
+| From container | Result |
+|---|---|
+| `--network=pasta:-T,<port>` → `127.0.0.1:<port>` | **reachable** |
+| `host.containers.internal:<port>` | connection refused |
+| `host.docker.internal:<port>` via `--add-host=...:host-gateway` | connection refused |
+
+Both names resolve to a non-loopback host address and cannot see a listener bound to
+`127.0.0.1`. Widening the bind to reach them would put the listener on an external
+interface — exactly what upstream avoids with the bridge-gateway bind. So the fork keeps
+the listener strictly on loopback and forwards the port into the container's netns. That
+is **tighter** than the Docker path, not looser.
+
+Note the syntax: `pasta:<opt>,<opt>` — a colon after the network name, commas between
+option tokens. `--network=pasta,-T,39856` is silently wrong.
+
+### 6. `fiss-mcp` venv pinned to Python 3.12 via uv
+
+`terra-mcp` declares `requires-python >=3.10`, but depends on `firecloud` 0.16.x (legacy
+`setup.py`) and its own classifiers stop at 3.12. This host's `python3` is 3.14.6, which
+cannot build that tree. `host_fiss_mcp/install.sh` now prefers `uv venv --python 3.12`
+(uv downloads the interpreter if absent) and falls back to `python3 -m venv` when uv is
+missing, so the Debian path is unchanged. An `import terra_mcp.server` check was added so
+a broken venv fails at install time rather than inside the launcher's 30-second readiness
+wait.
+
+### 7. Fully qualified base images
+
+`node:22-slim` → `docker.io/library/node:22-slim` (same for `eclipse-temurin:17-jdk`).
+Fedora's `/etc/containers/registries.conf` sets `short-name-mode = "enforcing"`, so a
+bare short name makes podman stop and ask which registry to use, hanging a
+non-interactive build. No-op for Docker.
+
+### 8. `service postfix start` made non-fatal
+
+`start_script.sh` runs as the unprivileged `claude` user, so starting postfix fails and
+`set -e` would abort before `claude` ever runs. Mail is optional here (no MTA on this
+host, `CLAUDE_NOTIFY_EMAIL` unset), so the failure is swallowed with a notice.
+
+### 9. Resource ceilings
+
+New `CLAUDE_SANDBOX_MEMORY` / `CLAUDE_SANDBOX_CPUS` → `--memory`/`--memory-swap`/`--cpus`.
+Equal memory and memory-swap makes the ceiling real rather than a soft push into swap.
+Enforcement is genuine here because cgroup v2 delegates `memory` to the user slice.
+
+### 10. GPU is opt-in and off
+
+Rootless podman needs a CDI spec (`nvidia-ctk cdi generate`) and `--device nvidia.com/gpu=all`
+rather than `--gpus all`. Gated behind `CLAUDE_SANDBOX_GPU=1`, which warns and continues
+without the GPU if no CDI spec exists.
+
+### 11. `docker` CLI references parameterized
+
+`run_claude_docker.sh`, `list_sandboxes.sh`, `scripts/sandbox_lib.sh` and
+`start_sandbox.sh` all shelled out to a literal `docker`. On a host with no `docker`
+binary the `docker ps` calls fail silently and every sandbox reports as not running.
+
+## Authentication posture
+
+No credential of any kind is baked into the image or mounted into the container.
+
+- **Claude Code** — the container runs its own `/login` on first launch; the token is
+  written to the sandbox state dir. The host's `~/.claude` is never mounted.
+- **Terra/GCP** — fiss-mcp runs on the **host** and inherits host gcloud ADC. The image
+  has no `gcloud`, no `gsutil`, no `google-cloud-*` libraries and no `~/.config/gcloud`
+  mount (all verified below). The MCP endpoint is the only path from the sandbox to Terra.
+- **`docker/msmtprc`** — audited: `auth off`, no passwords or tokens.
+- **No** ssh keys, ssh-agent socket, or `.netrc` reach the container.
+- All `gcloud auth` actions are left to the operator; `setup_host_podman.sh` only reports
+  credential state and never mutates it.
+
+### One correction to upstream's docs
+
+Upstream's README implies `FISS_MCP_ALLOW_WRITES=0` means the write tools are not
+registered. That is **not** how it works. All 21 tools stay registered and visible in
+`tools/list`, including the 5 write tools. The block is a **runtime guard**: each write
+tool begins with `_check_write_access(ctx)`, which raises `ToolError` when
+`ALLOW_WRITES` is false. Verified by calling `submit_workflow` and `abort_submission`
+with valid arguments against this install — both returned *"This server is running in
+read-only mode."* All 5 write tools were confirmed to call the guard.
+
+Practical consequence: the agent can see the write tools and may attempt one; it gets
+refused rather than being unable to name it. Real protection, but a guard, not absence.
+
+## Verification performed
+
+Image `localhost/claude-sandbox:0.0.1`, 8.68 GB (upstream README says ~3 GB).
+
+| Gate | Result |
+|---|---|
+| Toolchain | `claude` 2.1.200, `codegraph` 0.9.9, `headroom` 0.24.0, `cargo`, `java`, `rg`, `jq` all present; numpy/pandas/scipy/sklearn/seaborn import |
+| uid mapping | inside: `uid=1015(claude)`; host file written from container: `cox:cox (1000:1001)` |
+| `sudo` | passwordless, reaches uid 0 |
+| Isolation | `/home/cox`, `/mnt/data`, `gcloud`, `gsutil`, `~/.config/gcloud`, `~/.ssh`, `google.auth` all unreachable; `/etc/subuid` and `/etc/passwd` are the container's own, with no host users |
+| Ceilings | `memory.max` = 17179869184 (16 GiB), `memory.swap.max` = 0, `/dev/shm` = 2.0G |
+| fiss-mcp | host server on `127.0.0.1:39856`, registered as HTTP, **`✔ Connected`** from inside the container via the pasta forward |
+| codegraph | **`✔ Connected`** |
+| DinD | cleanly skipped |
+| Plugin pins | caveman + ponytail both vendored, informational |
+| Host cleanup | fiss-mcp killed by the launcher's EXIT trap |
+
+Not yet exercised: a live Terra API call. That needs application-default credentials,
+which are absent on this host — run `gcloud auth application-default login`.
+
+`bash -lc` hides `headroom`/`cargo`/`java`: a login shell re-sources `/etc/profile` and
+discards the Dockerfile's `ENV PATH`. `start_script.sh` uses a non-login shell, so this
+does not affect the sandbox — but it will confuse manual `podman exec` debugging.
+
+## Layout
+
+Code lives in this checkout; mutable sandbox data lives on the data volume.
+
+```
+/home/cox/git/code-sandbox-podman/     # this fork
+├── claude-sandbox-shared/.claude/     # shared settings, hooks, caveman + ponytail, OAuth token
+├── host_fiss_mcp/{venv,fiss-mcp}/     # host-side Terra MCP (uv, python 3.12, tag 1.0.5)
+├── context_reference/                 # -> /context
+└── env.nobara.sh                      # this host's instance
+
+/mnt/data/claude-sandbox/
+├── workspace/                         # -> /workspace (rw). Provision per project.
+└── state/main/                        # per-instance hot state + .claude.json
+```
+
+The fiss-mcp venv is **not relocatable** — uv bakes absolute paths into `pyvenv.cfg` and
+`bin/` shebangs. If this checkout moves, `rm -rf host_fiss_mcp/venv` and re-run
+`./setup_host.sh`.
+
+## Usage
+
+```bash
+source env.nobara.sh
+./setup_host.sh                  # verify-only; installs nothing, changes no system state
+cd docker && make ENGINE=podman && cd ..
+./run_claude_docker.sh           # then /login once, inside
+```
+
+`./start_sandbox.sh` (fzf menu) also works.
+
+## Portability to a GCP VM
+
+Dropping sysbox means no custom runtime on the VM — plain rootless podman.
+
+- Sizing: container is capped at 16 GB, so `n2-standard-8` (8 vCPU / 32 GB) is
+  comfortable; `e2-standard-4` (4 / 16) is the floor and leaves the host squeezed.
+- VM prep: subuid/subgid for the user, `loginctl enable-linger`, cgroup v2 memory
+  delegation, persistent disk for the data paths.
+- fiss-mcp picks up the VM's default service account from the metadata server, so the
+  no-credentials-in-container property holds end to end with no key files.
+- If the VM has SELinux enforcing (RHEL-family images), bind mounts will need `:z`.
+
+## Not addressed
+
+- **Base image CVEs** — the IDE scanner flags 3 critical / 8 high across
+  `eclipse-temurin:17-jdk` and `node:22-slim`. Inherited from upstream's pins; bumping
+  them is a separate decision.
+- Vertex mode is wired for the pasta forward but untested here.
+- Nested containers (podman-in-podman) — deliberately out of scope.
