@@ -696,12 +696,26 @@ if [[ "$FISS_MCP_ENABLED" == "1" ]]; then
   # This is a project id, not a credential. The container never sees it; only
   # the host-side server process does, and it stays scoped to that process
   # instead of mutating the host's gcloud configuration.
-  FISS_MCP_HOST="${HOST_BIND_IP}" \
-  FISS_MCP_PORT="${HOST_FISS_PORT}" \
-  FISS_MCP_PATH="${HOST_FISS_PATH}" \
-  FISS_MCP_ALLOW_WRITES="${FISS_MCP_ALLOW_WRITES:-0}" \
-  ${CLAUDE_SANDBOX_GCP_PROJECT:+GOOGLE_CLOUD_PROJECT="${CLAUDE_SANDBOX_GCP_PROJECT}"} \
-  nohup "${INSTALL_ROOT}/venv/bin/python" "${INSTALL_ROOT}/run-server.py" \
+  # Built as an array and handed to `env` rather than written as a command
+  # prefix. A shell recognizes assignment-prefixes syntactically, before
+  # expansion, so a word produced by ${VAR:+NAME=value} is NOT treated as an
+  # assignment -- it becomes the command name, and the spawn dies with
+  #     GOOGLE_CLOUD_PROJECT=... : command not found
+  # `env` takes assignments as ordinary arguments, so a conditionally-appended
+  # entry works. nohup and env both exec through, so $! is still the python pid
+  # and the EXIT trap's kill continues to reach the server.
+  FISS_ENV=(
+    "FISS_MCP_HOST=${HOST_BIND_IP}"
+    "FISS_MCP_PORT=${HOST_FISS_PORT}"
+    "FISS_MCP_PATH=${HOST_FISS_PATH}"
+    "FISS_MCP_ALLOW_WRITES=${FISS_MCP_ALLOW_WRITES:-0}"
+  )
+  if [[ -n "${CLAUDE_SANDBOX_GCP_PROJECT:-}" ]]; then
+    FISS_ENV+=( "GOOGLE_CLOUD_PROJECT=${CLAUDE_SANDBOX_GCP_PROJECT}" )
+  fi
+
+  nohup env "${FISS_ENV[@]}" \
+    "${INSTALL_ROOT}/venv/bin/python" "${INSTALL_ROOT}/run-server.py" \
     > "${HOST_FISS_LOG}" 2>&1 &
   HOST_FISS_PID=$!
 
