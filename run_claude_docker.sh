@@ -66,9 +66,9 @@ USE_SHARED="${CLAUDE_SANDBOX_USE_SHARED:-0}"
 # contains a *symlink* (or a copy) of the script resolved SCRIPT_DIR to the
 # caller's CWD, redirecting shared state + persistent state lookups to a
 # location that has none of the repo's content.
-# Resolve SCRIPT_DIR portably: GNU `readlink -f` doesn't exist on BSD/macOS
-# without coreutils. Follow the symlink chain manually so this works on a
-# fresh Mac before setup_host has installed `greadlink`.
+# Resolve SCRIPT_DIR by walking the symlink chain by hand rather than with
+# `readlink -f`. Kept from upstream: it costs nothing and avoids depending on
+# GNU readlink semantics.
 __resolve_dir() {
     local src=${BASH_SOURCE[0]}
     while [ -L "$src" ]; do
@@ -80,13 +80,6 @@ __resolve_dir() {
     cd -P "$(dirname "$src")" && pwd
 }
 SCRIPT_DIR=$(__resolve_dir)
-
-# Host OS branch. Most of the script is identical on Linux and macOS, but
-# a few host-only concerns differ (sysbox-runc availability, NVIDIA GPU
-# possibility, how the container reaches host-side fiss-mcp / vertex_proxy).
-# Gate those at the relevant points by checking IS_DARWIN.
-IS_DARWIN=0
-[[ "$(uname -s)" == "Darwin" ]] && IS_DARWIN=1
 
 # Container engine. `docker` keeps the original behaviour byte-for-byte;
 # `podman` selects the rootless-podman path used on Fedora/RHEL-family hosts
@@ -154,11 +147,6 @@ PASTA_FORWARDS=()
 # the listener off external interfaces (eth0/wlan0) without an iptables
 # fence. Fail fast if the bridge IP can't be determined.
 #
-# macOS: bind to 127.0.0.1. Docker Desktop routes the in-container
-# `host.docker.internal` name to the host's loopback via its embedded VM,
-# so 127.0.0.1 is reachable from the container without exposing the
-# listener to any external interface. There is no docker bridge gateway
-# on the host to inspect.
 #
 # rootless podman: bind to 127.0.0.1 and reach it from the container through a
 # pasta port forward (`--network=pasta:-T,<port>`), which maps that port on the
@@ -174,7 +162,7 @@ PASTA_FORWARDS=()
 # strictly on loopback — a tighter result than the Docker path, not a
 # looser one. register_pasta_forward() below records the ports to forward.
 resolve_host_bind_ip() {
-    if [[ "$IS_DARWIN" == "1" || "$IS_PODMAN" == "1" ]]; then
+    if [[ "$IS_PODMAN" == "1" ]]; then
         printf '127.0.0.1'
         return 0
     fi
@@ -279,15 +267,13 @@ if [[ "$USE_SHARED" == "1" ]]; then
     [ -s "$SANDBOX_HOME/.claude.json" ] || echo '{}' > "$SANDBOX_HOME/.claude.json"
 
     # history.jsonl redirect — keep per-instance without nesting a file
-    # mount inside the shared dir mount (which Docker Desktop's virtiofs
-    # refuses on macOS). In the shared .claude/ dir, history.jsonl is a
+    # mount inside the shared dir mount. In the shared .claude/ dir, it is a
     # SYMLINK to /per-instance-history.jsonl — a container-only path. Each
     # instance bind-mounts ITS history.jsonl at that top-level path, so
     # ~/.claude/history.jsonl → symlink → /per-instance-history.jsonl →
-    # per-instance host file. Top-level file mounts are not nested in any
-    # other bind mount, so virtiofs handles them fine. Linux behavior is
-    # identical: the same redirect pattern gives the same per-instance
-    # semantics that the old nested file mount gave.
+    # per-instance host file. Keeping the mount at the top level, un-nested,
+    # is what makes the redirect work; the earlier nested file mount did not
+    # give reliable per-instance semantics.
     SHARED_HIST="$SHARED_HOME/.claude/history.jsonl"
     if [[ ! -L "$SHARED_HIST" ]]; then
         # Remove any pre-existing file/dir at the path (legacy state from
@@ -399,9 +385,8 @@ if [[ "$USE_SHARED" == "1" ]]; then
       -v "${SANDBOX_HOME}/.claude/projects:/home/claude/.claude/projects"
       # Per-instance history.jsonl reached via the shared-dir symlink
       # `~/.claude/history.jsonl -> /per-instance-history.jsonl`. The mount
-      # target is at the container's top level (NOT nested inside the
-      # shared .claude/ dir mount), so it works on both Linux and macOS
-      # Docker Desktop / virtiofs.
+      # target is at the container's top level, NOT nested inside the shared
+      # .claude/ dir mount, which keeps it a plain file bind.
       -v "${SANDBOX_HOME}/.claude/history.jsonl:/per-instance-history.jsonl"
     )
 else
@@ -657,10 +642,9 @@ if [[ "$FISS_MCP_ENABLED" == "1" ]]; then
   HOST_FISS_PORT="${FISS_MCP_PORT:-$((39000 + PORT_OFFSET))}"
   HOST_FISS_PATH="/mcp/"
 
-  # Resolve the bind IP via the cross-OS helper at the top of this script.
-  # Linux → docker bridge gateway IP (off external interfaces, no iptables
-  # required). macOS → 127.0.0.1 (Docker Desktop routes host.docker.internal
-  # to host loopback via its VM).
+  # Resolve the bind IP via the helper at the top of this script: podman →
+  # 127.0.0.1 reached through a pasta forward; docker → the bridge gateway IP,
+  # off external interfaces and needing no iptables rule.
   if ! HOST_BIND_IP=$(resolve_host_bind_ip); then
     echo "fiss-mcp: refusing to bind without a known-safe IP." >&2
     exit 1
@@ -872,13 +856,6 @@ fi
 # (https://github.com/nestybox/sysbox/issues/50), so if the host has GPUs
 # we fall back to the default runc runtime and forward them with --gpus all.
 #
-# macOS: sysbox-runc is Linux-only (kernel namespaces). Docker Desktop's
-# embedded Linux VM gives roughly equivalent host-to-container isolation
-# via Hypervisor.framework, so the trade is fine. NVIDIA GPU passthrough
-# is impossible on macOS (no NVIDIA hardware on Apple Silicon, no driver
-# path from Docker VM to Metal). DinD inside the container is also
-# disabled by default — `start_script.sh` skips its inner dockerd when
-# SANDBOX_HAS_DIND=0.
 RUNTIME_FLAG=(--runtime=sysbox-runc)
 GPU_FLAGS=()
 HAVE_GPU=0
@@ -947,10 +924,6 @@ if [[ "$IS_PODMAN" == "1" ]]; then
     PODMAN_NET_FLAGS=(--network="pasta:${pasta_opts}")
     echo "podman: pasta forwards to host loopback -> ${PASTA_FORWARDS[*]}"
   fi
-elif [[ "$IS_DARWIN" == "1" ]]; then
-  YEL=$'\033[1;33m'; RST=$'\033[0m'
-  echo "${YEL}macOS host: no sysbox-runc (using default runc), no GPU passthrough, no DinD.${RST}"
-  RUNTIME_FLAG=()
 else
   if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
     HAVE_GPU=1
@@ -994,11 +967,9 @@ fi
 # To drop into a shell instead, swap `claude "$@"` below for `/bin/bash`.
 # Note: not using `exec` so the EXIT trap can still fire to clean up the
 # host fiss-mcp process after the container exits.
-# `${arr[@]+"${arr[@]}"}` form is the empty-array-safe expansion. macOS
-# ships bash 3.2 by default, which raises "unbound variable" on a plain
-# "${arr[@]}" reference when the array is empty under `set -u`. RUNTIME_FLAG
-# and GPU_FLAGS are both empty on Darwin (no sysbox, no NVIDIA), so the
-# guard is required there; harmless on Linux.
+# `${arr[@]+"${arr[@]}"}` is the empty-array-safe expansion: a plain
+# "${arr[@]}" on an empty array raises "unbound variable" under `set -u` on
+# older bash. Several of these arrays are legitimately empty, so keep the guard.
 #
 # SANDBOX_GIT_USER_NAME / _EMAIL forward ONLY the host's git identity, so the
 # agent can commit in read-write project mounts. Without them `git commit` dies
@@ -1053,7 +1024,7 @@ fi
   -e CLAUDE_NOTIFY_EMAIL="${CLAUDE_NOTIFY_EMAIL:-}" \
   -e CLAUDE_NOTIFY_FROM="${CLAUDE_NOTIFY_FROM:-claude-sandbox}" \
   -e CLAUDE_NOTIFY_HOSTNAME="${CLAUDE_NOTIFY_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}" \
-  -e SANDBOX_HAS_DIND="$([[ "${HAVE_GPU}" == "1" || "${IS_DARWIN}" == "1" || "${IS_PODMAN}" == "1" ]] && echo 0 || echo 1)" \
+  -e SANDBOX_HAS_DIND="$([[ "${HAVE_GPU}" == "1" || "${IS_PODMAN}" == "1" ]] && echo 0 || echo 1)" \
   -e FISS_MCP="${FISS_MCP_ENABLED}" \
   -e FISS_MCP_ALLOW_WRITES="${FISS_MCP_ALLOW_WRITES:-0}" \
   -e FISS_MCP_URL="${FISS_MCP_URL_FOR_CONTAINER}" \

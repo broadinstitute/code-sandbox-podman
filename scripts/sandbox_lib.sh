@@ -8,10 +8,10 @@
 # sandbox as not running).
 SB_ENGINE="${CLAUDE_SANDBOX_ENGINE:-podman}"
 
-# Cross-platform mtime in seconds since epoch.
-# GNU stat first (Linux is the primary host); fall back to BSD stat (macOS).
-# Note: `stat -f` on Linux means --file-system and exits 0 with garbage banner
-# output, so it must NOT come first or the OR short-circuit returns junk.
+# mtime in seconds since epoch. GNU stat first; the BSD form is kept only as a
+# harmless fallback. Note: `stat -f` on Linux means --file-system and exits 0
+# with garbage banner output, so it must NOT come first or the OR short-circuit
+# returns junk.
 sb_mtime_of() {
     stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null
 }

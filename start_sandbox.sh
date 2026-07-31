@@ -28,8 +28,8 @@
 
 set -euo pipefail
 
-# Portable SCRIPT_DIR resolution — BSD `readlink` (macOS) has no `-f`.
-# Manually walk symlink chain so this works on Linux and macOS alike.
+# SCRIPT_DIR resolution by walking the symlink chain by hand, rather than
+# relying on `readlink -f` semantics.
 __resolve_dir() {
     local src=${BASH_SOURCE[0]}
     while [ -L "$src" ]; do

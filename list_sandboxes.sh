@@ -6,8 +6,7 @@
 
 if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]:-0}" -lt 2 ]; }; then
     echo "Error: this script requires bash 4.2+ (running ${BASH_VERSION:-unknown})." >&2
-    echo "On macOS the system bash is 3.2 — install a newer one (e.g. 'brew install bash')" >&2
-    echo "and re-invoke with that interpreter, e.g.: /opt/homebrew/bin/bash $0" >&2
+    echo "Install a newer bash and re-invoke with that interpreter." >&2
     exit 1
 fi
 

@@ -6,11 +6,19 @@
 # not the helpers, so the entry point stays the same across platforms.
 #
 # Supported helpers:
-#   scripts/setup_host_linux.sh   (Linux: Debian/Ubuntu apt path)
-#   scripts/setup_host_macos.sh   (macOS: Homebrew + Docker Desktop/OrbStack)
+#   scripts/setup_host_podman.sh  (rootless podman — the supported path)
+#   scripts/setup_host_linux.sh   (Linux: Debian/Ubuntu apt path, upstream's,
+#                                  unverified in this fork)
 #
 # Args + env are forwarded verbatim. To force a specific helper for
-# testing, set SETUP_HOST_OS=linux or SETUP_HOST_OS=macos.
+# testing, set SETUP_HOST_OS=podman or SETUP_HOST_OS=linux.
+#
+# macOS support was removed in this fork: the helper it dispatched to installed
+# Docker Desktop or OrbStack, which is upstream's engine, not this one. podman
+# does run on macOS via `podman machine`, but the two things this sandbox
+# depends on — `--userns=keep-id` uid mapping and pasta loopback forwarding —
+# behave differently inside that VM and are untested. Claiming support would be
+# guessing, so the path is gone rather than left to rot.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -34,10 +42,16 @@ if [[ -z "$OS_KEY" ]]; then
         OS_KEY=linux
       fi
       ;;
-    Darwin) OS_KEY=macos ;;
+    Darwin)
+      echo "setup_host.sh: macOS is not supported by this fork." >&2
+      echo "                It targets rootless podman on a Fedora/RHEL-family" >&2
+      echo "                host. For the Docker/macOS path use upstream:" >&2
+      echo "                https://github.com/jonn-smith/claude-docker-sandbox" >&2
+      exit 1
+      ;;
     *)
       echo "setup_host.sh: unsupported host OS '$(uname -s)'." >&2
-      echo "                Supported: Linux (Debian/Ubuntu apt, or rootless podman), macOS." >&2
+      echo "                Supported: Linux with rootless podman." >&2
       exit 1
       ;;
   esac

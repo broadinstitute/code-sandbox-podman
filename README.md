@@ -32,8 +32,14 @@ equivalent and is not installed here. Treat `CLAUDE_SANDBOX_ENGINE=docker` as
 inherited, unverified code rather than a supported configuration. If you want
 Docker, use upstream — it is better maintained for that case.
 
-**Not supported: macOS.** Same reasoning: the code paths are inherited from
-upstream and untouched here, but nothing is tested.
+**Not supported: macOS.** Removed outright rather than left to rot — the
+`setup_host.sh` macOS helper installed Docker Desktop or OrbStack, which is not
+this engine, and every `IS_DARWIN` branch has been deleted from the launcher.
+`./setup_host.sh` now exits with a pointer to upstream on a Darwin host. podman
+itself does run on macOS via `podman machine`, but the two mechanisms this
+sandbox depends on — `--userns=keep-id` uid mapping and pasta loopback
+forwarding — behave differently inside that VM and are untested, so claiming
+support would be a guess.
 
 **Deliberately dropped on this path:**
 
@@ -98,8 +104,9 @@ the sandbox tree.
 >
 > Other Fedora/RHEL-family hosts should work through the same codepath. An
 > SELinux-enforcing host will additionally need `:z` on the bind mounts — that
-> is not handled yet. The upstream Docker and macOS paths are inherited but
-> untested here; see [Scope](#scope).
+> is not handled yet. macOS is not supported and its code paths are gone; the
+> Docker path survives only behind `CLAUDE_SANDBOX_ENGINE=docker` and is
+> untested here. See [Scope](#scope).
 
 ## Quick start (fresh clone)
 
@@ -153,41 +160,18 @@ Base: `node:22-slim`.
 - **Java 17** — Eclipse Temurin JDK at `/opt/java/openjdk`, `JAVA_HOME` exported.
 - **CodeGraph** — `codegraph` binary (self-contained bundle, vendored Node runtime) at `/usr/local/bin/codegraph` → `/opt/codegraph/current/bin/codegraph`. Version pinned via `CODEGRAPH_VERSION` in `docker/Dockerfile`; bump + `make rebuild` to refresh.
 - **Dev tooling** — `git`, `curl`, `ripgrep`, `vim`, `build-essential`.
-- **Passwordless `sudo`** for the container's `claude` user. UID/GID are remapped at container start to match the host invoker (`HOST_UID` / `HOST_GID` env vars supplied by `run_claude_docker.sh`), so a single image is shareable across hosts with different user IDs — no rebuild needed.
+- **Passwordless `sudo`** for the container's `claude` user (uid 1015). On the podman path the invoking user is mapped onto that uid by `--userns=keep-id:uid=1015`, so files written to mounts stay owned by the invoker on the host and no `usermod` runs. `HOST_UID` / `HOST_GID` are passed empty; they only drive the remap on upstream's Docker path.
 
-Approximate image size: ~3 GB.
+Image size: **8.68 GB** as built here. (Upstream's README says ~3 GB; the
+measured size of this build is well above that.)
 
 ## Prerequisites
 
-### Linux
+### Host requirements
 
-- Docker 28.x. Docker 29.x is **not** compatible with sysbox-runc —
-  containers fail with `namespace {"time" ""} does not exist`
-  ([sysbox#1011](https://github.com/nestybox/sysbox/issues/1011),
-  open as of 2026-06, no upstream fix). `setup_host.sh` pins docker-ce
-  to the newest 5:28.* in the Docker apt repo and holds it.
-- **Supported host OS** — `setup_host.sh` requires Docker's apt repo
-  to ship a 28.x build for the host's release suite. Verified per Ubuntu LTS:
-
-  | Ubuntu release | suite | docker-ce 28.x in repo? | Notes |
-  |---|---|---|---|
-  | 22.04 LTS | jammy | yes | works |
-  | 24.04 LTS | noble | yes | works, sysbox-supported |
-  | 24.10 | oracular | yes | works |
-  | 25.04 | plucky | yes | works |
-  | 25.10 | questing | yes | works |
-  | **26.04 LTS** | **resolute** | **no** | **not supported** — Docker ships 29.x only AND sysbox-ce's distro-compat list does not include 26.04. `setup_host.sh` will exit with the "no docker-ce 28.x" error. Use a 24.04 LTS or 22.04 LTS host for now, or pull the 28.x `.deb` from the `noble` pool by hand (unsupported workaround). |
-
-  Debian 10/11, Fedora 34-37, Rocky 8, Alma 8/9, CentOS Stream, Amazon
-  Linux 2/2023 are sysbox-supported per upstream — `setup_host.sh` itself
-  only knows the Debian/Ubuntu apt path, so other distros need an adapted
-  setup script.
-
-### Linux with rootless podman (no Docker, no sysbox)
-
-Set `CLAUDE_SANDBOX_ENGINE=podman` and the launcher takes a separate path.
-Use this on RHEL/Fedora-family hosts where Docker is not installed. Verified
-on Nobara 44 (Fedora 44 base) with podman 5.8.4 rootless.
+A Fedora/RHEL-family host running rootless podman. Verified on Nobara 44
+(Fedora 44 base) with podman 5.8.4. No Docker, no sysbox-runc, and nothing
+needs installing on the host beyond podman itself.
 
 - **podman >= 5.0.** Needs the `keep-id:uid=` userns syntax (podman 4.3+) and
   the pasta network backend (podman 5 default).
@@ -197,13 +181,16 @@ on Nobara 44 (Fedora 44 base) with podman 5.8.4 rootless.
 - **cgroup v2 with the `memory` controller delegated** to the user slice, if
   you want `CLAUDE_SANDBOX_MEMORY` to be enforced rather than ignored.
 - **`uv`** (recommended) so the host fiss-mcp venv gets a pinned Python 3.12.
-- Run `./setup_host.sh` as usual — it auto-dispatches to
-  `scripts/setup_host_podman.sh` when there is no `apt-get`, podman is
-  present, and docker is not. That helper only **verifies**; it installs no
-  packages and changes no system state.
-- Build with `make ENGINE=podman` (or export `CLAUDE_SANDBOX_ENGINE=podman`).
+- Run `./setup_host.sh` — it dispatches to `scripts/setup_host_podman.sh`
+  whenever podman is present. That helper only **verifies**: it installs no
+  packages, adds no systemd units, and writes nothing outside the sandbox tree.
+- Build with `make` (podman is the default; `make ENGINE=docker` would take
+  upstream's path, which is untested here).
 
-What differs from the Docker path, and why:
+### Why this differs from upstream
+
+For readers arriving from upstream. This is a summary; [FORK.md](FORK.md) has
+the full reasoning and the measurements behind each row.
 
 | Concern | Docker path | podman path |
 |---|---|---|
@@ -215,21 +202,6 @@ What differs from the Docker path, and why:
 | Mail relay | host postfix, configured by `setup_host_linux.sh` | not set up. Leave `CLAUDE_NOTIFY_EMAIL` unset; the notify hooks no-op and `start_script.sh` tolerates postfix failing to start. |
 | Login/group step | requires log out + log back in for the `docker` group | none — rootless podman uses no group membership. |
 
-### macOS
-
-- macOS 12 (Monterey) or newer, Apple Silicon or Intel.
-- A Docker engine: **Docker Desktop** (default; `brew install --cask docker`) or **OrbStack** (`SANDBOX_DOCKER_ENGINE=orbstack ./setup_host.sh` — faster and lighter, proprietary).
-- Homebrew. `./setup_host.sh` installs it if missing.
-- `setup_host.sh` dispatches to `scripts/setup_host_macos.sh` automatically based on `uname -s`; you still invoke `./setup_host.sh`.
-
-#### macOS limitations
-
-- **No NVIDIA GPU access.** Apple Silicon has no NVIDIA hardware, Metal GPUs can't be exposed to Linux containers, and Docker's embedded VM has no path to either. CUDA-dependent workloads (PyTorch GPU, llama.cpp w/ CUDA, etc.) run only in CPU mode. The NVIDIA bug #1730 workaround block in `setup_host.sh` is skipped.
-- **No sysbox-runc isolation by default.** sysbox is a Linux-kernel-namespaces runtime; not portable to macOS. Docker Desktop's Linux VM (via Apple Hypervisor.framework) provides roughly equivalent host-to-container isolation — a kernel exploit from inside a container hits the VM, not macOS. If you specifically need sysbox features (DinD with user-namespace remap), set up Colima with a sysbox-Lima base (out of scope for the default setup).
-- **No DinD by default.** `run_claude_docker.sh` sets `SANDBOX_HAS_DIND=0` on macOS so the container's `start_script.sh` skips its inner dockerd. Docker-in-docker can be made to work on macOS but the nested-VM path is slow and weakly isolated; not worth the default.
-- **Slower bind-mount I/O.** Host paths reach the container via virtio-fs through Docker Desktop's VM. Codegraph indexing on a large repo is noticeably slower than on Linux. OrbStack is measurably faster than Docker Desktop here.
-- **No mail relay by default.** Linux's `setup_host.sh` configures host postfix with mynetworks so the in-container hook can send via SMTP. macOS has no stock outbound-MTA path; `setup_host_macos.sh` prints instructions for configuring `/etc/postfix/main.cf` with SMTP-AUTH against Gmail/SES/SendGrid, but does not automate it. Skip if you don't need email notifications.
-- **Email notifications remain untested and may not work even after configuration.**
 
 - No host-side Claude Code install required. Each sandbox prompts `/login` on its own first launch and stores the resulting OAuth token inside its own state dir (`claude-sandbox-shared/.claude/.credentials.json` in shared mode, `claude-sandbox-persistent-state-<INSTANCE>/.claude/.credentials.json` in per-instance mode). The host's `~/.claude/` is NOT mounted into the container.
 
@@ -300,7 +272,7 @@ The launcher spawns [fiss-mcp](https://github.com/broadinstitute/fiss-mcp) as a 
 
 **Why host-side**: the container never sees `gcloud`, `gsutil`, `google-cloud-*` libs, `~/.config/gcloud`, or any service-account key file. The agent's only reachable path to Terra/GCP is the MCP tools the host server exposes — which are read-only by default. There is no shell-level bypass.
 
-**Install**: `setup_host.sh` runs `host_fiss_mcp/install.sh` once. It clones fiss-mcp into `host_fiss_mcp/fiss-mcp/` (next to the script in this repo) and creates a venv at `host_fiss_mcp/venv/` — both gitignored — so everything is self-contained inside the checkout and isolated from any other Python install on the host. Requires Python 3.10+ on the host (apt-installed by `setup_host.sh` if missing). If you launch `run_claude_docker.sh` with `FISS_MCP=1` and the install dir is absent, the run script errors out and tells you to run `./setup_host.sh`.
+**Install**: `setup_host.sh` runs `host_fiss_mcp/install.sh` once. It clones fiss-mcp into `host_fiss_mcp/fiss-mcp/` (next to the script in this repo) and creates a venv at `host_fiss_mcp/venv/` — both gitignored — so everything is self-contained inside the checkout and isolated from any other Python install on the host. The venv is pinned to Python 3.12 and built with `uv`, which downloads that interpreter if the host lacks it — `terra-mcp` depends on `firecloud` 0.16.x, a legacy `setup.py` package that will not build on newer interpreters such as Fedora 44's 3.14. Nothing is installed system-wide. If you launch `run_claude_docker.sh` with `FISS_MCP=1` and the install dir is absent, the run script errors out and tells you to run `./setup_host.sh`.
 
 The installer pins fiss-mcp to a specific release tag **and** verifies the resolved commit SHA against a recorded value. If the upstream tag has been moved, the install aborts rather than silently building a different version. A marker file in the venv encodes the pinned ref + SHA; a re-install runs automatically the next time you bump either constant in `host_fiss_mcp/install.sh`.
 
@@ -325,7 +297,7 @@ FISS_MCP_ALLOW_WRITES=1 ./run_claude_docker.sh    # on, WRITE MODE (loud banner)
 
 **Ports**: each instance gets a deterministic port in `39000-39999` hashed from `CLAUDE_SANDBOX_INSTANCE`, so concurrent sandboxes don't collide. Override with `FISS_MCP_PORT=<port>` if the auto-pick clashes with something else on the host.
 
-**Container connectivity**: `run_claude_docker.sh` adds `--add-host=host.docker.internal:host-gateway` so the container can reach the host on a stable name. Works with `sysbox-runc` because it's a Docker daemon flag, not a runtime concern.
+**Container connectivity**: on the podman path the host server binds to `127.0.0.1` and the container reaches it through a pasta port forward (`--network=pasta:-T,<port>`), so the listener never leaves loopback. `--add-host=host.docker.internal:host-gateway` is still declared so the name resolves, but it is not the transport — measured on a loopback-bound listener, both `host.docker.internal` and `host.containers.internal` get connection-refused because they resolve to a non-loopback host address.
 
 **Bind address**: the host server binds **only** the docker bridge gateway IP (auto-detected via `docker network inspect bridge`), not `0.0.0.0` and not `127.0.0.1`. That's the same address the container reaches us at via `host.docker.internal`, so container ingress is unchanged — but the listener is not present on `eth0` / `wlan0` / any external interface, so no iptables fence is required to keep it off the host's outside-world network. If the bridge gateway can't be determined (broken docker setup), the launcher fails fast rather than silently widening the bind to `0.0.0.0`.
 
