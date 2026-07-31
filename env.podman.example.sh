@@ -54,6 +54,12 @@ export CLAUDE_SANDBOX_USE_SHARED=1
 
 export CLAUDE_SANDBOX_INSTANCE=main
 
+# Parent of every instance state dir, read only by
+# SESSION_ARCHIVE/archive_sessions.sh (the launcher ignores it). Set this when
+# CLAUDE_SANDBOX_HOME points outside the checkout, or the archiver will scan
+# only the repo-relative defaults and find nothing.
+#export CLAUDE_SANDBOX_STATE_ROOT=/path/to/state
+
 # Per-instance write-hot state (cache, history, projects, .claude.json) on the
 # data volume, beside the podman image store.
 export CLAUDE_SANDBOX_HOME=/mnt/data/claude-sandbox/state/main
