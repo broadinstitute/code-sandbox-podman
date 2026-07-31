@@ -109,6 +109,14 @@ export FISS_MCP_ALLOW_WRITES=0
 # CodeGraph MCP (in-container stdio server, symbol/graph navigation).
 export CODEGRAPH=1
 
+# Claude Code auto-updater. Off, because it cannot work in this image and the
+# warning is noise on every launch: npm global (/usr/local/lib/node_modules) is
+# root-owned from build time while the container runs as claude, the path is not
+# bind-mounted, and the container runs --rm -- so an update would be discarded
+# on exit and re-downloaded next launch, drifting off the pinned
+# CLAUDE_CODE_VERSION. Upgrade by bumping that pin and re-running make.
+#export DISABLE_AUTOUPDATER=0
+
 # Email notifications: intentionally disabled. There is no postfix or MTA on
 # this host, and setting up a system MTA is not worth it for this. The
 # notify-if-long / notify-if-rate-limited hooks no-op while this is unset.

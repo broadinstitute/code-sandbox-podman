@@ -1,4 +1,6 @@
 {
+  "cleanupPeriodDays": 36500,
+  "model": "opus[1m]",
   "hooks": {
     "SessionStart": [
       {
@@ -69,7 +71,6 @@
       }
     }
   },
-  "cleanupPeriodDays": 36500,
   "effortLevel": "xhigh",
   "skipDangerousModePermissionPrompt": true,
   "theme": "dark",
@@ -77,5 +78,15 @@
   "inputNeededNotifEnabled": true,
   "agentPushNotifEnabled": true,
   "skipAutoPermissionPrompt": true,
-  "model": "opus[1m]"
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "deny": [
+      "Write(/context/**)",
+      "Edit(/context/**)",
+      "Write(/home/claude/.claude/hooks/**)",
+      "Edit(/home/claude/.claude/hooks/**)",
+      "Write(/home/claude/.claude/settings.json)",
+      "Edit(/home/claude/.claude/settings.json)"
+    ]
+  }
 }

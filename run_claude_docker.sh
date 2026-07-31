@@ -418,7 +418,14 @@ MOUNTS+=(
   # code's atomic rename(2) works fine. Earlier attempts to bind the
   # host's ~/.claude/.credentials.json directly broke rename and
   # silently dropped post-/login tokens.
-  -v "${CLAUDE_SANDBOX_CONTEXT_DIR}:/context"
+  # :ro enforced at the mount. The README describes /context as a "read-only
+  # context dir", but without this flag the bind was writable, so the agent
+  # could write back into the host directory it points at — by default the
+  # repo's own context_reference/, i.e. inside the checkout. That matters most
+  # in bypassPermissions mode, where Claude Code's protected-path guard is
+  # explicitly disabled and nothing above the mount stops the write.
+  # MS_RDONLY makes it fail at the syscall, independent of permission mode.
+  -v "${CLAUDE_SANDBOX_CONTEXT_DIR}:/context:ro"
 )
 # The DinD volume only exists to give a nested dockerd its own
 # /var/lib/docker. There is no nested dockerd on the podman path, so mounting
@@ -910,6 +917,19 @@ fi
 # and GPU_FLAGS are both empty on Darwin (no sysbox, no NVIDIA), so the
 # guard is required there; harmless on Linux.
 #
+# DISABLE_AUTOUPDATER defaults to 1 because the auto-updater cannot succeed in
+# this image and its warning ("Can't auto-update: npm global folder isn't
+# writable") is pure noise every session. `npm install -g` ran as root at build
+# time, so /usr/local/lib/node_modules is root:root 755, while the container
+# runs as claude. Making it writable would be worse, not better: that path is
+# baked into the image layer with no bind mount, and the container runs --rm, so
+# any update would be downloaded into the ephemeral overlay, thrown away on
+# exit, and re-downloaded on every launch — while silently drifting off the
+# CLAUDE_CODE_VERSION pin the Dockerfile keeps for reproducibility.
+#
+# The supported upgrade path is to bump CLAUDE_CODE_VERSION in docker/Dockerfile
+# and re-run make. Set DISABLE_AUTOUPDATER=0 to get the warning back.
+#
 # On the podman path: HOST_UID / HOST_GID are deliberately passed empty.
 # --userns=keep-id has already put us on the image's claude uid before the
 # entrypoint runs, and uid-fixup-entrypoint.sh's usermod/groupmod would need
@@ -939,6 +959,7 @@ fi
   -e FISS_MCP_ALLOW_WRITES="${FISS_MCP_ALLOW_WRITES:-0}" \
   -e FISS_MCP_URL="${FISS_MCP_URL_FOR_CONTAINER}" \
   -e CODEGRAPH="${CODEGRAPH:-1}" \
+  -e DISABLE_AUTOUPDATER="${DISABLE_AUTOUPDATER:-1}" \
   -e ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-}" \
   -e CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-}" \
   -e ANTHROPIC_TARGET_API_URL="${VERTEX_PROXY_URL_FOR_CONTAINER}" \
