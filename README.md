@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/code-sandbox-podman-logo.svg" alt="code-sandbox-podman" width="600">
+  <img src="assets/seal_sandbox.png" alt="code-sandbox-podman" width="600">
 </p>
 
 # code-sandbox-podman
