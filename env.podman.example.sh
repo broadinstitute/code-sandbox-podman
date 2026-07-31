@@ -69,6 +69,19 @@ export CLAUDE_SANDBOX_CONTEXT_DIR="${__ENV_SCRIPT_DIR}/context_reference"
 # /read-only-reference/<basename>. Nothing by default.
 #export CLAUDE_SANDBOX_RO_MOUNTS="/mnt/data/warp_development/scanvi_benchmark/results"
 
+# Read-write project mounts, each surfacing at /projects/<basename>. Use for
+# real host checkouts the agent should edit in place rather than copies staged
+# into /workspace. Under rootless podman keep-id keeps the written files owned
+# by the invoking user on the host.
+#
+# The container holds no git credentials (no ssh keys, no ssh-agent socket, no
+# ~/.git-credentials, no ~/.netrc, no gh, no tokens, no credential helper), so
+# `git push` to an authenticated remote cannot succeed from inside; remote
+# state stays host-controlled. Local history and uncommitted work in these
+# checkouts are NOT protected, especially in bypassPermissions mode.
+#
+#export CLAUDE_SANDBOX_RW_MOUNTS="$HOME/git/projectA $HOME/git/projectB"
+
 # -------------------------------------------------------------- features ----
 
 # Headroom token-compression proxy, ON.

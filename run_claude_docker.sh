@@ -449,79 +449,93 @@ fi
 #
 # Example env.<INSTANCE>.sh:
 #   export CLAUDE_SANDBOX_RO_MOUNTS="/data/reference /srv/corpus /etc/shared-config"
-RO_MOUNTS_RAW="${CLAUDE_SANDBOX_RO_MOUNTS:-}"
-if [[ -n "$RO_MOUNTS_RAW" ]]; then
-    # Validate + canonicalize (resolve symlinks, strip trailing slashes,
-    # dedupe). After this loop, RO_PATHS holds unique canonical paths.
-    declare -a RO_PATHS=()
-    declare -A RO_SEEN=()
-    for raw in $RO_MOUNTS_RAW; do
-        if [[ "$raw" != /* ]]; then
-            echo "CRITICAL ERROR: CLAUDE_SANDBOX_RO_MOUNTS entry '$raw' must be an absolute path." >&2
+# Container-name picker shared by the read-only and read-write mount handlers.
+# Each entry's name is its last N path segments joined by underscores; N starts
+# at 1 (basename only) and is bumped on collision.
+#
+#   name_at_depth /a/b/c 1  -> "c"
+#   name_at_depth /a/b/c 2  -> "b_c"
+#   name_at_depth /a/b/c 99 -> "a_b_c"   (caps at total segment count)
+name_at_depth() {
+    local path="$1" depth="$2"
+    local -a segs=() cleaned=()
+    local s
+    IFS='/' read -ra segs <<< "$path"
+    for s in "${segs[@]}"; do
+        [[ -n "$s" ]] && cleaned+=("$s")
+    done
+    local n=${#cleaned[@]}
+    (( depth > n )) && depth=$n
+    local start=$(( n - depth ))
+    local out="" i
+    for (( i = start; i < n; i++ )); do
+        if [[ -z "$out" ]]; then out=${cleaned[i]}; else out="${out}_${cleaned[i]}"; fi
+    done
+    printf '%s' "$out"
+}
+
+# Mount a space-separated list of host directories under a container prefix,
+# naming each by basename with collision-driven depth bumping. Appends to the
+# global MOUNTS array. Factored out of the original read-only-only version so
+# the read-write list gets identical validation, canonicalization, dedupe and
+# name-collision handling rather than a second, subtly different copy.
+#
+#   $1  raw space-separated host paths
+#   $2  container prefix (e.g. /read-only-reference)
+#   $3  mount option suffix (":ro", or "" for read-write)
+#   $4  log label (e.g. ro-mount)
+#   $5  env var name, for error messages
+add_prefixed_mounts() {
+    local raw="$1" prefix="$2" opts="$3" label="$4" varname="$5"
+    [[ -n "$raw" ]] || return 0
+
+    # Validate + canonicalize (resolve symlinks, strip trailing slashes, dedupe).
+    local -a PATHS=()
+    declare -A SEEN=()
+    local rawp canon
+    for rawp in $raw; do
+        if [[ "$rawp" != /* ]]; then
+            echo "CRITICAL ERROR: ${varname} entry '$rawp' must be an absolute path." >&2
             exit 1
         fi
-        if [[ ! -e "$raw" ]]; then
-            echo "CRITICAL ERROR: CLAUDE_SANDBOX_RO_MOUNTS host path '$raw' does not exist on this host." >&2
-            echo "                Refusing to let Docker auto-create it as a directory." >&2
+        if [[ ! -e "$rawp" ]]; then
+            echo "CRITICAL ERROR: ${varname} host path '$rawp' does not exist on this host." >&2
+            echo "                Refusing to let the engine auto-create it as a directory." >&2
             exit 1
         fi
-        # Portable canonicalization: `readlink -f` doesn't exist on BSD
-        # without coreutils. For a directory, `cd -P` resolves symlinks
-        # and gives an absolute path. For a file (rare for an RO mount
-        # but the validation above accepts any -e), resolve the parent
-        # dir the same way and append the basename.
-        if [[ -d "$raw" ]]; then
-            canon=$(cd -P "$raw" && pwd)
+        # Portable canonicalization: `readlink -f` doesn't exist on BSD without
+        # coreutils. `cd -P` resolves symlinks for a directory; for a file,
+        # resolve the parent and re-append the basename.
+        if [[ -d "$rawp" ]]; then
+            canon=$(cd -P "$rawp" && pwd)
         else
-            canon="$(cd -P "$(dirname "$raw")" && pwd)/$(basename "$raw")"
+            canon="$(cd -P "$(dirname "$rawp")" && pwd)/$(basename "$rawp")"
         fi
-        if [[ -z "${RO_SEEN[$canon]:-}" ]]; then
-            RO_SEEN[$canon]=1
-            RO_PATHS+=("$canon")
+        if [[ -z "${SEEN[$canon]:-}" ]]; then
+            SEEN[$canon]=1
+            PATHS+=("$canon")
         fi
     done
 
-    # Pick container names with collision-driven depth bumping. Each
-    # entry's name is its last N path segments joined by underscores;
-    # N starts at 1 (basename only) and gets bumped by 1 for every
-    # path whose current name collides with another's.
-    #
-    # name_at_depth /a/b/c 1 -> "c"
-    # name_at_depth /a/b/c 2 -> "b_c"
-    # name_at_depth /a/b/c 99 -> "a_b_c"   (caps at total segment count)
-    name_at_depth() {
-        local path="$1" depth="$2"
-        IFS='/' read -ra segs <<< "$path"
-        # Drop empty leading segment from absolute path.
-        local cleaned=()
-        local s
-        for s in "${segs[@]}"; do
-            [[ -n "$s" ]] && cleaned+=("$s")
-        done
-        local n=${#cleaned[@]}
-        (( depth > n )) && depth=$n
-        local start=$(( n - depth ))
-        local out="" i
-        for (( i = start; i < n; i++ )); do
-            if [[ -z "$out" ]]; then out=${cleaned[i]}; else out="${out}_${cleaned[i]}"; fi
-        done
-        printf '%s' "$out"
-    }
-
-    declare -A RO_DEPTH=()
-    for p in "${RO_PATHS[@]}"; do
-        RO_DEPTH["$p"]=1
+    declare -A DEPTH=()
+    local p
+    for p in "${PATHS[@]}"; do
+        DEPTH["$p"]=1
     done
 
-    # Bump-on-collision loop. Capped at 32 iterations as a paranoid
-    # backstop; real-world paths shouldn't need anywhere near that.
+    # Bump-on-collision loop. Capped at 32 as a paranoid backstop; real paths
+    # never need anywhere near that.
+    local iter n collision total cur s
+    local -a segs=()
     for (( iter = 0; iter < 32; iter++ )); do
-        # name -> count
+        # Reset per iteration. `declare -A x=()` does NOT clear an existing
+        # associative array, so unset first or stale counts leak forward and
+        # the loop can never see itself converge.
+        unset NAME_COUNT NAME_PATHS
         declare -A NAME_COUNT=()
-        # name -> "p1<NL>p2<NL>..."
         declare -A NAME_PATHS=()
-        for p in "${RO_PATHS[@]}"; do
-            n=$(name_at_depth "$p" "${RO_DEPTH[$p]}")
+        for p in "${PATHS[@]}"; do
+            n=$(name_at_depth "$p" "${DEPTH[$p]}")
             NAME_COUNT[$n]=$(( ${NAME_COUNT[$n]:-0} + 1 ))
             NAME_PATHS[$n]+="${p}"$'\n'
         done
@@ -529,39 +543,59 @@ if [[ -n "$RO_MOUNTS_RAW" ]]; then
         for n in "${!NAME_COUNT[@]}"; do
             (( NAME_COUNT[$n] > 1 )) || continue
             collision=1
-            # Bump every path claiming this name, capped at the path's
-            # own segment count (a path of three segments can't go to
-            # depth 4 — leave it where it is).
             while IFS= read -r p; do
                 [[ -z "$p" ]] && continue
                 IFS='/' read -ra segs <<< "$p"
                 total=0
                 for s in "${segs[@]}"; do [[ -n "$s" ]] && total=$(( total + 1 )); done
-                cur=${RO_DEPTH[$p]}
+                cur=${DEPTH[$p]}
                 if (( cur < total )); then
-                    RO_DEPTH[$p]=$(( cur + 1 ))
+                    DEPTH[$p]=$(( cur + 1 ))
                 fi
             done <<< "${NAME_PATHS[$n]}"
         done
         (( collision == 0 )) && break
     done
 
-    # Final collision check — if two siblings have identical full paths
-    # this loop converged but they still collide (impossible after dedupe,
-    # but cheap to assert).
-    declare -A FINAL_NAMES=()
-    for p in "${RO_PATHS[@]}"; do
-        n=$(name_at_depth "$p" "${RO_DEPTH[$p]}")
-        if [[ -n "${FINAL_NAMES[$n]:-}" ]]; then
-            echo "CRITICAL ERROR: CLAUDE_SANDBOX_RO_MOUNTS — could not pick unique container names." >&2
-            echo "                Both '$p' and '${FINAL_NAMES[$n]}' resolve to '/read-only-reference/$n'." >&2
+    # Final collision assert — impossible after dedupe, but cheap.
+    declare -A FINAL=()
+    for p in "${PATHS[@]}"; do
+        n=$(name_at_depth "$p" "${DEPTH[$p]}")
+        if [[ -n "${FINAL[$n]:-}" ]]; then
+            echo "CRITICAL ERROR: ${varname} — could not pick unique container names." >&2
+            echo "                Both '$p' and '${FINAL[$n]}' resolve to '${prefix}/$n'." >&2
             exit 1
         fi
-        FINAL_NAMES[$n]=$p
-        MOUNTS+=( -v "${p}:/read-only-reference/${n}:ro" )
-        echo "ro-mount: ${p} -> /read-only-reference/${n}"
+        FINAL[$n]=$p
+        MOUNTS+=( -v "${p}:${prefix}/${n}${opts}" )
+        echo "${label}: ${p} -> ${prefix}/${n}${opts:+ (}${opts:+read-only}${opts:+)}"
     done
-fi
+}
+
+add_prefixed_mounts "${CLAUDE_SANDBOX_RO_MOUNTS:-}" \
+    /read-only-reference ":ro" "ro-mount" CLAUDE_SANDBOX_RO_MOUNTS
+
+# Optional caller-supplied READ-WRITE mounts. Same naming convention as the
+# read-only list, but mounted at /projects/<name> with no :ro so the agent can
+# edit in place.
+#
+# Use for real project checkouts you want worked on directly instead of copied
+# into /workspace. Under rootless podman the container runs with
+# --userns=keep-id pinned to the image's claude uid, so files the agent writes
+# come out owned by the invoking user on the host rather than by an unreadable
+# subuid.
+#
+# Scope this deliberately. Everything listed is fully writable, and in
+# bypassPermissions mode nothing prompts first. Remote state is safe by
+# construction: the container carries no git credentials at all — no ssh keys,
+# no ssh-agent socket, no ~/.git-credentials, no ~/.netrc, no gh, no
+# GH_TOKEN/GITHUB_TOKEN, no credential helper — so `git push` to an
+# authenticated remote cannot succeed from inside. Local history and
+# uncommitted work in these checkouts are NOT protected.
+#
+#   export CLAUDE_SANDBOX_RW_MOUNTS="$HOME/git/warp $HOME/git/warp-tools"
+add_prefixed_mounts "${CLAUDE_SANDBOX_RW_MOUNTS:-}" \
+    /projects "" "rw-mount" CLAUDE_SANDBOX_RW_MOUNTS
 
 # fiss-mcp (Terra MCP server) lifecycle. The server runs on the HOST (not in
 # the container) over HTTP. The container only sees a URL; it has no gcloud,
@@ -917,6 +951,22 @@ fi
 # and GPU_FLAGS are both empty on Darwin (no sysbox, no NVIDIA), so the
 # guard is required there; harmless on Linux.
 #
+# SANDBOX_GIT_USER_NAME / _EMAIL forward ONLY the host's git identity, so the
+# agent can commit in read-write project mounts. Without them `git commit` dies
+# with "Author identity unknown", since /home/claude/.gitconfig does not exist
+# in the image and is not bind-mounted.
+#
+# Identity is not a credential — it is the name and email already stamped on
+# every public commit. The host ~/.gitconfig is deliberately NOT mounted: it
+# also carries `credential.helper = !gh auth git-credential` entries, and
+# mounting credential configuration into the sandbox is exactly what this
+# design avoids. Forwarding two scalars carries no such risk.
+#
+# start_script.sh writes these into the container's GLOBAL git config rather
+# than exporting GIT_AUTHOR_*/GIT_COMMITTER_*, because those env vars outrank
+# repository-local config. Global config ranks below it, so a mounted repo that
+# sets its own user.email still wins.
+#
 # DISABLE_AUTOUPDATER defaults to 1 because the auto-updater cannot succeed in
 # this image and its warning ("Can't auto-update: npm global folder isn't
 # writable") is pure noise every session. `npm install -g` ran as root at build
@@ -960,6 +1010,8 @@ fi
   -e FISS_MCP_URL="${FISS_MCP_URL_FOR_CONTAINER}" \
   -e CODEGRAPH="${CODEGRAPH:-1}" \
   -e DISABLE_AUTOUPDATER="${DISABLE_AUTOUPDATER:-1}" \
+  -e SANDBOX_GIT_USER_NAME="${SANDBOX_GIT_USER_NAME:-$(git config --global user.name 2>/dev/null || true)}" \
+  -e SANDBOX_GIT_USER_EMAIL="${SANDBOX_GIT_USER_EMAIL:-$(git config --global user.email 2>/dev/null || true)}" \
   -e ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-}" \
   -e CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-}" \
   -e ANTHROPIC_TARGET_API_URL="${VERTEX_PROXY_URL_FOR_CONTAINER}" \

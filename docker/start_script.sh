@@ -18,6 +18,25 @@ fi
 # (no sysbox-runc equivalent exists, so a nested dockerd cannot mount overlay2).
 ~/start_dockerd.sh
 
+# Git identity for read-write project mounts. /home/claude/.gitconfig is not in
+# the image and not bind-mounted, so without this `git commit` fails outright
+# with "Author identity unknown". The launcher forwards the host's name/email
+# (identity only -- no credential helper, no token, and the host ~/.gitconfig is
+# never mounted).
+#
+# Written to GLOBAL config on purpose: GIT_AUTHOR_*/GIT_COMMITTER_* env vars
+# would outrank a mounted repository's own user.email, silently mislabelling
+# commits there. Global config ranks below repo-local, so per-repo identity wins.
+if [[ -n "${SANDBOX_GIT_USER_NAME:-}" ]]; then
+  git config --global user.name "${SANDBOX_GIT_USER_NAME}"
+fi
+if [[ -n "${SANDBOX_GIT_USER_EMAIL:-}" ]]; then
+  git config --global user.email "${SANDBOX_GIT_USER_EMAIL}"
+fi
+if [[ -n "${SANDBOX_GIT_USER_EMAIL:-}${SANDBOX_GIT_USER_NAME:-}" ]]; then
+  echo "git identity: ${SANDBOX_GIT_USER_NAME:-?} <${SANDBOX_GIT_USER_EMAIL:-?}> (commits local only; no push credentials in sandbox)"
+fi
+
 # Vertex routing signal (Option B). When the host launcher spawned
 # vertex_proxy.py and forwarded its URL via ANTHROPIC_TARGET_API_URL, that
 # becomes the upstream for Anthropic-shape traffic instead of api.anthropic.com.
