@@ -631,6 +631,19 @@ trap cleanup_host_services EXIT INT TERM
 
 if [[ "$FISS_MCP_ENABLED" == "1" ]]; then
   INSTALL_ROOT="${SCRIPT_DIR}/host_fiss_mcp"
+  # Warn loudly rather than let every GCS tool fail at call time with an
+  # opaque OSError from deep inside google-cloud-storage.
+  if [[ -z "${CLAUDE_SANDBOX_GCP_PROJECT:-}" ]]; then
+    YEL=$'\033[1;33m'; RST=$'\033[0m'
+    echo "${YEL}fiss-mcp: CLAUDE_SANDBOX_GCP_PROJECT is unset.${RST}"
+    echo "${YEL}          Terra/Cromwell tools will work, but the GCS tools${RST}"
+    echo "${YEL}          (list_gcs_objects, read_gcs_object, download_gcs_file,${RST}"
+    echo "${YEL}          get_gcs_object_metadata) will fail with${RST}"
+    echo "${YEL}          \"Project was not passed and could not be determined\".${RST}"
+    echo "${YEL}          Set it in env.<INSTANCE>.sh to a project where you have${RST}"
+    echo "${YEL}          serviceusage.services.use.${RST}"
+  fi
+
   if [[ ! -x "${INSTALL_ROOT}/venv/bin/python" || ! -f "${INSTALL_ROOT}/run-server.py" ]]; then
     echo "ERROR: fiss-mcp host install not found at ${INSTALL_ROOT}." >&2
     echo "       Run ./setup_host.sh on this machine first to install it," >&2
@@ -662,10 +675,32 @@ if [[ "$FISS_MCP_ENABLED" == "1" ]]; then
   HOST_FISS_LOG="${SANDBOX_HOME}/.claude/host_fiss_mcp.log"
   mkdir -p "$(dirname "${HOST_FISS_LOG}")"
 
+  # GOOGLE_CLOUD_PROJECT is required for fiss-mcp's GCS tools, not optional.
+  # Every one of them builds a bare `storage.Client()` with no project= and no
+  # user_project, and google-cloud-storage refuses to construct without a
+  # project:
+  #     OSError: Project was not passed and could not be determined
+  #              from the environment.
+  #
+  # With end-user ADC (type "authorized_user") there is nothing for the library
+  # to infer from. Note specifically that
+  #     gcloud auth application-default set-quota-project <p>
+  # does NOT fix this: it sets quota_project_id, which google.auth reports as
+  # the credentials' quota project and which silences the "no quota project"
+  # warning, but google.auth.default() still returns project=None. Measured on
+  # this host with quota_project_id populated. The project comes from
+  # GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or from a configured gcloud
+  # core/project, so set it explicitly here rather than depending on the
+  # operator's global gcloud default.
+  #
+  # This is a project id, not a credential. The container never sees it; only
+  # the host-side server process does, and it stays scoped to that process
+  # instead of mutating the host's gcloud configuration.
   FISS_MCP_HOST="${HOST_BIND_IP}" \
   FISS_MCP_PORT="${HOST_FISS_PORT}" \
   FISS_MCP_PATH="${HOST_FISS_PATH}" \
   FISS_MCP_ALLOW_WRITES="${FISS_MCP_ALLOW_WRITES:-0}" \
+  ${CLAUDE_SANDBOX_GCP_PROJECT:+GOOGLE_CLOUD_PROJECT="${CLAUDE_SANDBOX_GCP_PROJECT}"} \
   nohup "${INSTALL_ROOT}/venv/bin/python" "${INSTALL_ROOT}/run-server.py" \
     > "${HOST_FISS_LOG}" 2>&1 &
   HOST_FISS_PID=$!

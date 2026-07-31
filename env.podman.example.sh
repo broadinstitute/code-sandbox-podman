@@ -103,6 +103,17 @@ export HEADROOM=1
 # Nothing is injected into the container.
 export FISS_MCP=1
 
+# GCP project for the host fiss-mcp server's GCS tools. REQUIRED for those
+# tools: they construct a bare storage.Client(), which refuses to build without
+# a project ("Project was not passed and could not be determined from the
+# environment"). Note that `gcloud auth application-default set-quota-project`
+# does NOT satisfy this -- it sets quota_project_id, but google.auth.default()
+# still reports project=None. Pick a project where you have
+# serviceusage.services.use; it is a quota/API-enablement project only and
+# grants no bucket access of its own.
+#
+#export CLAUDE_SANDBOX_GCP_PROJECT=my-project
+
 # Read-only.
 #
 # Note how this is actually enforced, because the upstream README describes it
