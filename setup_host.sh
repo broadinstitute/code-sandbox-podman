@@ -24,9 +24,11 @@ if [[ -z "$OS_KEY" ]]; then
       # RHEL/Fedora family, typically -- that is both unusable (no apt) and
       # wrong (sysbox is Docker-only; there is no podman equivalent). Route
       # those hosts to the verify-only podman helper instead.
-      if ! command -v apt-get >/dev/null 2>&1 \
-         && command -v podman >/dev/null 2>&1 \
-         && ! command -v docker >/dev/null 2>&1; then
+      # This fork targets rootless podman, so prefer that helper whenever
+      # podman is present. setup_host_linux.sh (apt + Docker CE 28.x +
+      # sysbox-runc + postfix) is upstream's path and is not exercised here;
+      # force it with SETUP_HOST_OS=linux if you actually want it.
+      if command -v podman >/dev/null 2>&1; then
         OS_KEY=podman
       else
         OS_KEY=linux

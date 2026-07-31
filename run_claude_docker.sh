@@ -119,7 +119,7 @@ IS_DARWIN=0
 #
 #   * Host services are reached over a pasta port forward rather than
 #     host.docker.internal — see resolve_host_bind_ip below.
-ENGINE="${CLAUDE_SANDBOX_ENGINE:-docker}"
+ENGINE="${CLAUDE_SANDBOX_ENGINE:-podman}"
 IS_PODMAN=0
 [[ "$ENGINE" == *podman* ]] && IS_PODMAN=1
 

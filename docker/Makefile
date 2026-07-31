@@ -9,7 +9,7 @@ TAG2 = claude-sandbox:latest
 # the Dockerfile are fully qualified (docker.io/library/...) because podman
 # runs with short-name-mode="enforcing" on those distros and would otherwise
 # block on an interactive registry prompt.
-ENGINE ?= $(if $(CLAUDE_SANDBOX_ENGINE),$(CLAUDE_SANDBOX_ENGINE),docker)
+ENGINE ?= $(if $(CLAUDE_SANDBOX_ENGINE),$(CLAUDE_SANDBOX_ENGINE),podman)
 
 # Centralized build flags so `build` and `rebuild` share everything except
 # cache behavior.

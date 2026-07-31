@@ -6,7 +6,7 @@
 # selected podman (rootless-podman hosts have no docker binary at all, so the
 # `docker ps` calls below would otherwise fail silently and report every
 # sandbox as not running).
-SB_ENGINE="${CLAUDE_SANDBOX_ENGINE:-docker}"
+SB_ENGINE="${CLAUDE_SANDBOX_ENGINE:-podman}"
 
 # Cross-platform mtime in seconds since epoch.
 # GNU stat first (Linux is the primary host); fall back to BSD stat (macOS).

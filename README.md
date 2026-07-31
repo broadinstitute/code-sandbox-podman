@@ -1,15 +1,78 @@
 <p align="center">
-  <img src="assets/claude_docker_sandbox_logo.png" alt="Kmera Logo" width="600">
+  <img src="assets/code-sandbox-podman-logo.svg" alt="code-sandbox-podman" width="600">
 </p>
 
-# Claude Code Sandbox
+# code-sandbox-podman
 
-A Docker-based sandbox for running the [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) CLI with local filesystem isolation. The container sees only a designated workspace directory and its own persistent state — the host's home directory, `/etc`, and everything else on the host remain invisible to the agent.
+A **rootless [podman](https://podman.io/)** sandbox for running a coding agent with
+local filesystem isolation. The container sees only a designated workspace
+directory and its own persistent state — the host's home directory, `/etc`, and
+everything else on the host stay invisible to the agent.
 
-The image is a batteries-included dev environment, so `pip install`, `cargo install`, and `sudo apt install` work without network delay on launch.
+The image is a batteries-included dev environment, so `pip install`,
+`cargo install`, and `sudo apt install` work without network delay on launch.
+
+> **This fork is podman-only.** It is a fork of
+> [jonn-smith/claude-docker-sandbox](https://github.com/jonn-smith/claude-docker-sandbox),
+> which is Docker-based and assumes a Debian/Ubuntu host. See
+> [Scope](#scope) for exactly what that means and
+> [FORK.md](FORK.md) for every change and why.
+
+## Scope
+
+**Supported:** rootless podman >= 5.0 on a Fedora/RHEL-family host.
+Developed and verified on Nobara 44 (Fedora 44 base) with podman 5.8.4.
+
+**Not supported: Docker.** Upstream's Docker path still exists in the code —
+every podman change is gated on `CLAUDE_SANDBOX_ENGINE`, and setting it to
+`docker` will take the original branches. But `podman` is now the **default**,
+nothing in this fork is tested against Docker, and the Docker path depends on
+[sysbox-runc](https://github.com/nestybox/sysbox), which has no podman
+equivalent and is not installed here. Treat `CLAUDE_SANDBOX_ENGINE=docker` as
+inherited, unverified code rather than a supported configuration. If you want
+Docker, use upstream — it is better maintained for that case.
+
+**Not supported: macOS.** Same reasoning: the code paths are inherited from
+upstream and untouched here, but nothing is tested.
+
+**Deliberately dropped on this path:**
+
+| Upstream feature | Status here | Why |
+|---|---|---|
+| sysbox-runc runtime | removed | Docker-only OCI shim; needs rootful `dockerd` plus its own daemons. Rootless podman's user namespace already provides the host-filesystem isolation this sandbox depends on. |
+| Docker-in-Docker | removed | Without sysbox a nested daemon cannot mount overlay2. `SANDBOX_HAS_DIND=0`. |
+| host postfix / email notifications | not set up | Only feeds the optional notify hooks. Leave `CLAUDE_NOTIFY_EMAIL` unset and they no-op. |
+| GPU passthrough | opt-in, off | Rootless podman needs a CDI spec and `--device`, not `--gpus`. Enable with `CLAUDE_SANDBOX_GPU=1`. |
+
+## Using it with agents other than Claude Code
+
+The isolation is **agent-agnostic**. Nothing about the security model is
+Claude-specific — it is all engine-level and would hold for any process:
+
+- rootless podman user namespace, so the host filesystem is unreachable
+- `--userns=keep-id` so written files stay owned by the invoking user
+- explicit bind mounts as the only way in or out
+- `--memory` / `--cpus` ceilings enforced via cgroup v2
+- no credentials in the image: no ssh keys, no `~/.git-credentials`, no `gh`,
+  no cloud CLIs, no tokens — so `git push` to an authenticated remote cannot
+  succeed from inside, by construction rather than by policy
+
+What *is* Claude-specific is the tooling layered on top: the pinned
+`@anthropic-ai/claude-code` install in `docker/Dockerfile`, the MCP wiring and
+plugin-pin checks in `docker/start_script.sh`, and the `.claude` state layout
+the launcher mounts.
+
+To host a different agent, add its runtime to the Dockerfile and swap the final
+`claude "$@"` in `docker/start_script.sh` for that agent's entrypoint. The
+launcher, mount layout, resource limits and host-side
+[fiss-mcp](https://github.com/broadinstitute/fiss-mcp) bridge need no changes —
+they only care that *something* runs in the container. Expect to add tools: the
+image ships Python, Node, Rust, Java and the usual CLI kit, but an agent with
+different expectations will want its own.
 
 # Features
-Look, this uses a heavy docker image, and it's suited to my (Jonn's) needs.  Nevertheless you may find it useful.
+This carries a heavy image and is shaped around its authors' needs. You may
+still find it useful.
 
 Beyond the normal setup and build features, this sandbox has:
 - Automated email notifications for prompts that take longer than <CONFIGURABLE> seconds to complete (default 120)
@@ -21,19 +84,29 @@ Beyond the normal setup and build features, this sandbox has:
 
 I've tried to include everything I need for my typical work.
 
-Runs on **Linux** and **macOS** (Apple Silicon or Intel). User-facing scripts (`./setup_host.sh`, `./run_claude_docker.sh`, `./start_sandbox.sh`) detect the OS via `uname` and dispatch internally; you never invoke an OS-specific script directly. See [macOS limitations](#macos-limitations) for what's degraded.
+User-facing scripts (`./setup_host.sh`, `./run_claude_docker.sh`,
+`./start_sandbox.sh`) detect the host and dispatch internally; you never invoke
+a platform-specific script directly. On a host with podman, `setup_host.sh`
+routes to `scripts/setup_host_podman.sh`, which **verifies rather than
+installs** — it adds no packages, no systemd units, and writes nothing outside
+the sandbox tree.
 
-> **Tested configurations** —
-> - **Ubuntu 24.04.2 LTS** (noble) and **Ubuntu 24.04.4 LTS** (noble) on x86_64 GCP VMs.
-> - **macOS 15.7.7** (build 24G720, Darwin 24.6.0) on **Apple Silicon** (arm64, Docker Desktop).
+> **Tested configuration** —
+> - **Nobara 44** (Fedora 44 base), x86_64, **podman 5.8.4 rootless**,
+>   netavark + pasta, cgroup v2 with the `memory` controller delegated,
+>   SELinux disabled.
 >
-> Other Linux distros listed in [Prerequisites](#prerequisites) should work via the same `setup_host.sh` codepath but haven't been driven end-to-end. macOS on **Intel** is in the same code path as Apple Silicon but is untested. Report what does and doesn't work.
+> Other Fedora/RHEL-family hosts should work through the same codepath. An
+> SELinux-enforcing host will additionally need `:z` on the bind mounts — that
+> is not handled yet. The upstream Docker and macOS paths are inherited but
+> untested here; see [Scope](#scope).
 
 ## Quick start (fresh clone)
 
 ```bash
-# 1. Install host prerequisites (sysbox runtime, postfix mynetworks,
-#    fiss-mcp host venv).
+# 1. Verify host prerequisites and build the host-side fiss-mcp venv.
+#    Installs nothing and changes no system state.
+source env.podman.example.sh   # or your env.<INSTANCE>.sh
 ./setup_host.sh
 
 # 2. Build the image
