@@ -66,15 +66,26 @@ if [[ "${HEADROOM:-0}" == "1" ]]; then
   HR_PID=$!
   trap 'kill "${HR_PID}" 2>/dev/null || true' EXIT
 
+  # Startup is slow on purpose: headroom-ai[proxy] imports transformers for
+  # tokenization, which costs ~25-30s in this image before the port binds. A
+  # 25s budget used to just barely fit and now races — allow 90s. The loop
+  # also bails early if headroom died, so a genuine crash still fails fast
+  # instead of burning the full timeout.
   echo -n "Waiting for headroom proxy to start "
-  for _ in {1..25}; do
+  for _ in {1..90}; do
+    curl -fsS "http://127.0.0.1:${HEADROOM_PORT}/readyz" >/dev/null 2>&1 && break
+    kill -0 "${HR_PID}" 2>/dev/null || break
     echo -n "."
-    curl -fsS "http://127.0.0.1:${HEADROOM_PORT}/stats" >/dev/null 2>&1 && break
     sleep 1
   done
+  echo
 
-  if ! curl -fsS "http://127.0.0.1:${HEADROOM_PORT}/stats" >/dev/null 2>&1; then
-    echo "headroom: failed to come up — see /tmp/headroom.log" >&2
+  if ! curl -fsS "http://127.0.0.1:${HEADROOM_PORT}/readyz" >/dev/null 2>&1; then
+    if kill -0 "${HR_PID}" 2>/dev/null; then
+      echo "headroom: still not ready after 90s (process alive) — see /tmp/headroom.log" >&2
+    else
+      echo "headroom: process exited during startup — see /tmp/headroom.log" >&2
+    fi
     tail -20 /tmp/headroom.log >&2 || true
     exit 1
   fi

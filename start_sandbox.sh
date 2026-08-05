@@ -597,7 +597,7 @@ check_not_running() {
     [ -z "$cid" ] && return 0
     echo "Sandbox '${CHOSEN_AREA}' is already running (container ${cid:0:12})." >&2
     echo "  Attach with:  ${CLAUDE_SANDBOX_ENGINE:-podman} exec -it claude-sandbox-${CHOSEN_AREA} bash" >&2
-    echo "  Or stop:      docker stop claude-sandbox-${CHOSEN_AREA}" >&2
+    echo "  Or stop:      ${CLAUDE_SANDBOX_ENGINE:-podman} stop claude-sandbox-${CHOSEN_AREA}" >&2
     echo "Returning to area picker." >&2
     return 10
 }

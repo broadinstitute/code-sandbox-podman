@@ -21,7 +21,7 @@ source "$__LS_SCRIPT_DIR/scripts/sandbox_lib.sh"
 CIDS=()
 while IFS= read -r cid; do
     [ -n "$cid" ] && CIDS+=("$cid")
-done < <("${CLAUDE_SANDBOX_ENGINE:-podman}" ps --filter ancestor=claude-sandbox --format '{{.ID}}')
+done < <("$SB_ENGINE" ps --filter ancestor=claude-sandbox --format '{{.ID}}')
 
 if [ "${#CIDS[@]}" -eq 0 ]; then
     echo "No running claude-sandbox instances."
@@ -33,7 +33,7 @@ echo
 
 mount_source_for() {
     local cid=$1 dest=$2
-    docker inspect --format \
+    "$SB_ENGINE" inspect --format \
         "{{range .Mounts}}{{if eq .Destination \"${dest}\"}}{{.Source}}{{end}}{{end}}" \
         "$cid"
 }
@@ -42,7 +42,7 @@ mount_source_for() {
 # .Source otherwise.
 mount_volume_for() {
     local cid=$1 dest=$2
-    docker inspect --format \
+    "$SB_ENGINE" inspect --format \
         "{{range .Mounts}}{{if eq .Destination \"${dest}\"}}{{if eq .Type \"volume\"}}{{.Name}}{{else}}{{.Source}}{{end}}{{end}}{{end}}" \
         "$cid"
 }
@@ -52,15 +52,15 @@ mount_volume_for() {
 now=$(date +%s)
 
 for cid in "${CIDS[@]}"; do
-    raw_name=$(docker inspect --format '{{.Name}}' "$cid")
+    raw_name=$("$SB_ENGINE" inspect --format '{{.Name}}' "$cid")
     raw_name="${raw_name#/}"
     if [[ "$raw_name" == claude-sandbox-* ]]; then
         instance="${raw_name#claude-sandbox-}"
     else
         instance="(unnamed: $raw_name)"
     fi
-    status=$("${CLAUDE_SANDBOX_ENGINE:-podman}" ps --filter id="$cid" --format '{{.Status}}')
-    image=$(docker inspect --format '{{.Config.Image}}' "$cid")
+    status=$("$SB_ENGINE" ps --filter id="$cid" --format '{{.Status}}')
+    image=$("$SB_ENGINE" inspect --format '{{.Config.Image}}' "$cid")
 
     workspace=$(mount_source_for "$cid" /workspace)
     context=$(mount_source_for "$cid" /context)
