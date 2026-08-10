@@ -348,28 +348,164 @@ enabling NSS subid *breaks* rootless podman for local users
 `pam_exec` hook allocating ranges at first login — workable, but a broken PAM
 stack locks everyone out.
 
-### First login: authenticate to GCP yourself
+### Admin: one-time host setup
 
-Each user does this once, on the VM. Nothing is automated and no credential is
-ever baked into the image or the container:
+Debian's cloud image is minimal — nothing container-related ships by default.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  podman passt uidmap fuse-overlayfs crun \
+  dbus-user-session slirp4netns \
+  git jq fzf gh
+```
+
+Every package is load-bearing:
+
+| package | why it is needed |
+|---|---|
+| `podman` | 5.4.2 in trixie; the launcher requires >= 5 |
+| `passt` | provides `pasta`, which `--network=pasta:-T` needs to reach host fiss-mcp |
+| `uidmap` | `newuidmap`/`newgidmap`. **Rootless podman fails outright without it** |
+| `fuse-overlayfs`, `crun` | rootless storage driver and OCI runtime |
+| `dbus-user-session` | systemd user session; `loginctl enable-linger` does not hold without it |
+| `git`, `jq`, `fzf` | repo operations, host-side JSON, the `start_sandbox.sh` menu |
+| `gh` | GitHub CLI (2.46.0 in trixie) for each user's `gh auth login` |
+
+Then **uv**, which is not packaged in Debian. Install it once, system-wide, so
+every user has it rather than each running a `curl | sh`:
+
+```bash
+curl -LsSf https://github.com/astral-sh/uv/releases/download/0.12.3/uv-x86_64-unknown-linux-gnu.tar.gz \
+  | sudo tar -xz -C /usr/local/bin --strip-components=1 --wildcards '*/uv' '*/uvx'
+uv --version
+```
+
+This extracts a binary rather than piping a script into `sudo sh`. **uv is
+required, not optional:** trixie's python3 is 3.13, and `terra-mcp` depends on
+`firecloud` 0.16.x — a legacy `setup.py` package that will not build on 3.13.
+uv fetches a pinned 3.12 interpreter, which is the only reason the host venv
+builds at all. `host_fiss_mcp/install.sh` fails with instructions if uv is absent.
+
+Finally, put the checkout somewhere every user can read:
+
+```bash
+sudo git clone https://github.com/broadinstitute/code-sandbox-podman /opt/code-sandbox-podman
+cd /opt/code-sandbox-podman/docker && sudo make && cd ..
+```
+
+The image is built once by an admin. Users do not need to build it, and if the
+image store is shared read-only (below) they cannot.
+
+### Per-user setup (every user does this once)
+
+Five steps. Steps 1 and 5 are one command each; 2 and 3 are the interactive
+logins only you can do.
+
+**Important:** logging in to this VM does **not** authenticate you to Google
+Cloud. SSH used your *SSH key* from project metadata, which has nothing to do
+with your Google identity. fiss-mcp reads credentials from your own
+`~/.config/gcloud`, so step 2 is required even though you got in "with GCP".
+
+```bash
+# 0. ssh in
+gcloud compute ssh warp-claude-sandbox-2 --zone us-central1-c
+```
+
+**1. Provision.** Creates your directories on the data disk, seeds your Claude
+settings, writes your `env.<USER>.sh`, and enables linger. Authenticates nothing.
+
+```bash
+cd /opt/code-sandbox-podman        # wherever the shared checkout lives
+./scripts/provision-sandbox-user.sh
+```
+
+It stops with an explanation if anything is missing — notably a `/etc/subuid`
+range, without which rootless podman cannot work at all.
+
+**2. Google Cloud.** Both commands print a URL: open it on your laptop, paste
+the code back. `--no-launch-browser` because the VM is headless.
 
 ```bash
 gcloud auth login --no-launch-browser
 gcloud auth application-default login --no-launch-browser
 ```
 
-`--no-launch-browser` because the VM is headless: gcloud prints a URL, you
-complete it in a browser on your laptop, and paste the code back.
-
-Then set the project used by fiss-mcp's GCS tools, which need a project and do
-**not** get one from `set-quota-project` (see the fiss-mcp section):
+Then set your project in `env.<USER>.sh`:
 
 ```bash
-export CLAUDE_SANDBOX_GCP_PROJECT=<a project where you have serviceusage.services.use>
+export CLAUDE_SANDBOX_GCP_PROJECT=<project where you have serviceusage.services.use>
 ```
 
-Claude Code itself is authenticated separately, with `/login` inside the
-container on first launch. The host's `~/.claude` is never mounted.
+Without it, fiss-mcp's four GCS tools fail with `Project was not passed and could
+not be determined from the environment`. Note that
+`gcloud auth application-default set-quota-project` does **not** satisfy this —
+it sets `quota_project_id`, but `google.auth.default()` still returns
+`project=None`.
+
+**3. GitHub** (skip if you never push from this host):
+
+```bash
+gh auth login --web
+```
+
+Prints a one-time code; open the URL on your laptop. This also configures git's
+credential helper, so HTTPS pushes work afterwards. An SSH key is the
+alternative, but `--web` avoids generating and registering one.
+
+This authenticates **you on the host**. The container deliberately carries no
+git credentials — no ssh keys, no `~/.git-credentials`, no `gh`, no tokens — so
+`git push` from inside the sandbox cannot succeed. **Commit inside, push
+outside.** That is the design: the agent can write code and history, and a human
+decides what leaves the machine.
+
+**4. Build your fiss-mcp venv.** Installs nothing system-wide; uv fetches its own
+pinned Python 3.12 into your directory.
+
+```bash
+source env.$USER.sh
+./setup_host.sh
+```
+
+**5. Launch.** On the very first run, type `/login` inside to authenticate Claude
+Code. The token is stored in your own state dir; the host's `~/.claude` is never
+mounted.
+
+```bash
+./run_claude_docker.sh
+```
+
+Later sessions resume with `./run_claude_docker.sh --resume <session-id>`.
+Session IDs are per-sandbox and are not visible to the host's `claude`.
+
+#### What each user gets
+
+```
+/mnt/sandbox/users/<user>/          chmod 700 — other users cannot read it
+├── workspace/                      -> /workspace  (rw) — provision this yourself
+├── state/                          per-instance hot state, .claude.json
+├── shared/.claude/                 settings, hooks, plugins, YOUR Claude token
+└── fiss-mcp/{venv,fiss-mcp}/       your own uv venv and pinned clone
+```
+
+Nothing of one user's is reachable by another, and none of it is in `$HOME` —
+home directories are on the small boot disk, and the 8.33 GB image plus
+workspaces do not fit there.
+
+#### Adding a user
+
+Append their public key to the project metadata; the Google guest agent creates
+the account with `useradd`, which is what allocates the `/etc/subuid` ranges
+rootless podman needs:
+
+```bash
+gcloud compute project-info describe \
+  --format="value(commonInstanceMetadata.items.filter(\"key:ssh-keys\").extract(\"value\"))" > keys.txt
+printf '%s\n' "newuser:ssh-rsa AAAA... newuser@laptop" >> keys.txt
+gcloud compute project-info add-metadata --metadata-from-file ssh-keys=keys.txt
+```
+
+They then run the five steps above. No admin action beyond the key.
 
 ### Capacity, not disk, is the real limit
 

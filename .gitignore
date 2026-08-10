@@ -48,6 +48,7 @@ env.sh
 env.*.sh
 !env.example.sh
 !env.podman.example.sh
+!env.gcp.example.sh
 
 # Vertex-mode activation script holds a real GCP project id. Only the
 # placeholder template is tracked.
