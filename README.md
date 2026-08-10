@@ -451,6 +451,12 @@ cd /opt/code-sandbox-podman        # wherever the shared checkout lives
 ./scripts/provision-sandbox-user.sh
 ```
 
+**Run this before anything else podman-related.** It writes your
+`~/.config/containers/storage.conf`, which is what makes the shared image store
+visible to you. Running `podman images` first shows an empty list and
+`podman run` falls back to a registry pull — that looks like a broken store but
+just means it is not configured yet.
+
 **No root, and no sudo.** Everything it touches is your own home or your own
 directory on the data disk. If a host-level prerequisite is missing it stops and
 prints the exact command an admin should run, rather than failing obscurely.

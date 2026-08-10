@@ -64,7 +64,15 @@ du -sh "$STORE" | sed 's/^/  store size: /'
 
 cat <<EOF
 
-Done. Each user picks this up through ~/.config/containers/storage.conf:
+Done. Each user picks this up through ~/.config/containers/storage.conf.
+
+IMPORTANT ordering: a user sees nothing from this store until that file exists.
+provision-sandbox-user.sh writes it, so run that FIRST. Checking `podman images`
+before provisioning shows an empty list and `podman run` falls back to a registry
+pull -- which looks like the shared store failing when it is simply not
+configured yet.
+
+The file it writes:
 
     [storage]
     driver = "overlay"
