@@ -78,6 +78,16 @@ The file it writes:
     driver = "overlay"
     [storage.options]
     additionalimagestores = [ "${STORE}" ]
+    [storage.options.overlay]
+    mount_program = "/usr/bin/fuse-overlayfs"
+
+The mount_program line is REQUIRED. This store is built by rootful podman, whose
+overlay layers carry trusted.overlay.* xattrs; a rootless consumer mounts with
+userxattr and cannot read them, so the container starts with an incomplete
+rootfs and fails with "OCI runtime attempted to invoke a command that was not
+found". The image lists fine in that state -- only running breaks -- so the
+symptom is easy to misread. fuse-overlayfs handles ownership in userspace and
+fixes it.
 
 scripts/provision-sandbox-user.sh writes that automatically. Verify as a
 NON-admin user with:

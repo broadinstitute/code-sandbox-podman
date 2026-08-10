@@ -46,7 +46,9 @@ echo
 # ---------------------------------------------------------------- checks ----
 echo "=== prerequisites ==="
 
-for b in podman pasta uv git; do
+# fuse-overlayfs is in this list because the shared image store does not work
+# without it — see the storage.conf written further down.
+for b in podman pasta uv git fuse-overlayfs; do
     if command -v "$b" >/dev/null 2>&1; then
         ok "$b present"
     else
@@ -55,8 +57,15 @@ for b in podman pasta uv git; do
 done
 
 if command -v podman >/dev/null 2>&1; then
-    v="$(podman --version 2>/dev/null | awk '{print $3}')"
-    if [[ -n "${v%%.*}" ]] && (( ${v%%.*} >= 5 )); then
+    # `|| true` matters: under `set -o pipefail` a failing `podman --version`
+    # makes this assignment non-zero, and `set -e` then kills the script with no
+    # output at all -- exactly when the user most needs to be told what is wrong.
+    v="$(podman --version 2>/dev/null | awk '{print $3}')" || true
+    if [[ -z "$v" ]]; then
+        fatal "podman is on PATH but \`podman --version\` produced nothing."
+        echo "          It is probably misconfigured. Try running it directly to"
+        echo "          see the error: podman --version"
+    elif [[ -n "${v%%.*}" ]] && (( ${v%%.*} >= 5 )); then
         ok "podman $v (>= 5 required for keep-id:uid= and pasta)"
     else
         fatal "podman $v is too old; >= 5.0 required"
@@ -187,18 +196,36 @@ if [[ -d "$IMAGE_STORE" ]]; then
 # Written by scripts/provision-sandbox-user.sh.
 #
 # The sandbox image is ~8.3 GB. additionalimagestores exposes one shared,
-# root-populated copy read-only, so this account does not hold its own — with an
-# empty graphroot plus the shared store, podman lists the image as
-# ReadOnly=true, runs it without copying, and the local graphroot stays tiny.
+# root-populated copy read-only, so this account does not hold its own: podman
+# lists it as R/O=true, runs it without copying, and this user's own graphroot
+# stays at a couple of hundred KB.
 #
 # Consequence, and it is intended: you cannot rebuild or modify the image. An
 # admin owns it via scripts/build-shared-image.sh, so everyone provably runs the
 # same one.
+#
+# mount_program is REQUIRED, not a tuning knob. The shared store is populated by
+# ROOTFUL podman, whose overlay layers carry trusted.overlay.* xattrs. A rootless
+# consumer mounts overlay with userxattr and cannot interpret those, so the
+# merged rootfs comes up incomplete and the container dies with something
+# thoroughly unhelpful:
+#
+#   crun: open `.../merged/run/.containerenv`: No such file or directory:
+#   OCI runtime attempted to invoke a command that was not found
+#
+# The image still LISTS fine in that state, because its metadata is readable —
+# only running fails, which makes it easy to believe the store is working when it
+# is not. fuse-overlayfs resolves layer ownership in userspace instead of relying
+# on kernel xattr semantics, and fixes it. Verified end to end on a second,
+# sudo-less account: image R/O=true, \`claude --version\` runs, local store 196K.
 [storage]
 driver = "overlay"
 
 [storage.options]
 additionalimagestores = [ "${IMAGE_STORE}" ]
+
+[storage.options.overlay]
+mount_program = "/usr/bin/fuse-overlayfs"
 CONF
         ok "wrote ${STORAGE_CONF} -> ${IMAGE_STORE}"
     fi
