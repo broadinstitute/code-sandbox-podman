@@ -212,8 +212,19 @@ the full reasoning and the measurements behind each row.
 
 ## Running on a GCP VM (multi-user)
 
-Verified end to end on `warp-pipeline-dev`. Every value below was checked against
-a real deployment rather than copied from Google's docs.
+Verified end to end on a real GCP deployment: Debian 13, podman 5.4.2, a
+separate data disk, and multiple users. Every value below was checked against
+that deployment rather than copied from Google's docs.
+
+The commands use placeholders — `$PROJECT`, `$ZONE`, `$VM`, `$NETWORK` — because
+the specifics differ per project. Set them once:
+
+```bash
+PROJECT=my-project
+ZONE=us-central1-c
+VM=claude-sandbox
+NETWORK=default          # see the note below if your project has no `default`
+```
 
 ### Why Debian 13 and not 12
 
@@ -236,7 +247,7 @@ VM rebuild:
 
 ```bash
 gcloud compute disks create sandbox-data \
-  --zone us-central1-c --size 200GB --type pd-balanced
+  --project "$PROJECT" --zone "$ZONE" --size 200GB --type pd-balanced
 ```
 
 Sizing: `8 GB image + 8 GB rebuild headroom + ~2 GB per user`. Measured per-user
@@ -249,22 +260,28 @@ indexing are IO-bound.
 ### Create the instance
 
 ```bash
-gcloud compute instances create warp-claude-sandbox-2 \
-  --zone us-central1-c \
+gcloud compute instances create "$VM" \
+  --project "$PROJECT" --zone "$ZONE" \
   --machine-type e2-highmem-8 \
   --image-family debian-13 --image-project debian-cloud \
   --boot-disk-size 50GB --boot-disk-type pd-balanced \
-  --network warp-firewall-network --subnet warp-firewall-network \
+  --network "$NETWORK" --subnet "$NETWORK" \
   --disk name=sandbox-data,device-name=sandbox-data,mode=rw,auto-delete=no
 ```
 
 Notes that cost real debugging time:
 
 * **`--network` / `--subnet` are required** if the project has no `default`
-  network. Without them the create fails with
+  network — many organisation-managed projects do not have one. Without them the
+  create fails with
   `Invalid value for field 'resource.networkInterfaces[0].network' ... cannot be
-  found`. Copy the values from a working instance:
-  `gcloud compute instances describe <vm> --format="yaml(networkInterfaces)"`.
+  found`, which does not say what to do about it. Find the right values by
+  copying them from a working instance in the same project:
+
+  ```bash
+  gcloud compute instances describe <existing-vm> --zone "$ZONE" \
+    --format="yaml(networkInterfaces)"
+  ```
 * **`auto-delete=no`** on the data disk. This is what makes future VM rebuilds
   cheap: delete the instance, keep the data.
 * **50 GB boot, not 10.** Home directories live on the boot disk.
@@ -348,7 +365,7 @@ allocates `/etc/subuid` + `/etc/subgid` ranges from `login.defs`. Rootless
 podman requires those ranges. Confirm for any user with:
 
 ```bash
-grep "^$USER:" /etc/subuid /etc/subgid     # e.g. rcox:624288:65536
+grep "^$USER:" /etc/subuid /etc/subgid     # e.g. alice:624288:65536
 ```
 
 **Do not switch to OS Login for this.** OS Login users resolve through NSS with
@@ -423,7 +440,7 @@ with your Google identity. fiss-mcp reads credentials from your own
 
 ```bash
 # 0. ssh in
-gcloud compute ssh warp-claude-sandbox-2 --zone us-central1-c
+gcloud compute ssh "$VM" --zone "$ZONE"
 ```
 
 **1. Provision.** Creates your directories on the data disk, seeds your Claude
@@ -448,7 +465,7 @@ loginctl enable-linger $USER
 # must list `memory`, or CLAUDE_SANDBOX_MEMORY is silently ignored
 cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers
 
-# must print a range, e.g. rcox:624288:65536 — rootless podman cannot work without it
+# must print a range, e.g. alice:624288:65536 — rootless podman cannot work without it
 grep "^$USER:" /etc/subuid /etc/subgid
 ```
 

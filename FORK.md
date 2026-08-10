@@ -17,7 +17,7 @@ unchanged and upstream rebases stay tractable.
 | OS | Nobara 44 (Fedora 44 base), no `apt` |
 | Engine | podman 5.8.4, rootless, netavark + pasta |
 | Image store | `/mnt/data/containers/storage` |
-| subuid/subgid | `cox:524288:65536` |
+| subuid/subgid | a 65536-wide range for the invoking user |
 | SELinux | disabled (so no `:z`/`:Z` relabeling needed; an enforcing host will need it) |
 | cgroups | v2, systemd, `memory` delegated to the user slice |
 | Host uid/gid | 1000:1001 |
@@ -43,7 +43,7 @@ Measured mapping inside the container:
 
 ```
 container 0..1014  -> subuid 1..1015     (so uid 0 is mapped: sudo still works)
-container 1015     -> host uid 1000      (cox)
+container 1015     -> the invoking host uid
 container 1016+    -> subuid 1016+
 ```
 
@@ -167,9 +167,9 @@ Image `localhost/claude-sandbox:0.0.1`, 8.68 GB (upstream README says ~3 GB).
 | Gate | Result |
 |---|---|
 | Toolchain | `claude` 2.1.200, `codegraph` 0.9.9, `headroom` 0.24.0, `cargo`, `java`, `rg`, `jq` all present; numpy/pandas/scipy/sklearn/seaborn import |
-| uid mapping | inside: `uid=1015(claude)`; host file written from container: `cox:cox (1000:1001)` |
+| uid mapping | inside: `uid=1015(claude)`; a host file written from the container comes out owned by the invoking user |
 | `sudo` | passwordless, reaches uid 0 |
-| Isolation | `/home/cox`, `/mnt/data`, `gcloud`, `gsutil`, `~/.config/gcloud`, `~/.ssh`, `google.auth` all unreachable; `/etc/subuid` and `/etc/passwd` are the container's own, with no host users |
+| Isolation | the host home directory, the host data volume, `gcloud`, `gsutil`, `~/.config/gcloud`, `~/.ssh` and `google.auth` all unreachable; `/etc/subuid` and `/etc/passwd` are the container's own, with no host users |
 | Ceilings | `memory.max` = 17179869184 (16 GiB), `memory.swap.max` = 0, `/dev/shm` = 2.0G |
 | fiss-mcp | host server on `127.0.0.1:39856`, registered as HTTP, **`✔ Connected`** from inside the container via the pasta forward |
 | codegraph | **`✔ Connected`** |
@@ -189,7 +189,7 @@ does not affect the sandbox — but it will confuse manual `podman exec` debuggi
 Code lives in this checkout; mutable sandbox data lives on the data volume.
 
 ```
-/home/cox/git/code-sandbox-podman/     # this fork
+<checkout>/                            # this fork
 ├── claude-sandbox-shared/.claude/     # shared settings, hooks, caveman + ponytail, OAuth token
 ├── host_fiss_mcp/{venv,fiss-mcp}/     # host-side Terra MCP (uv, python 3.12, tag 1.0.5)
 ├── context_reference/                 # -> /context
