@@ -234,3 +234,108 @@ Dropping sysbox means no custom runtime on the VM — plain rootless podman.
   them is a separate decision.
 - Vertex mode is wired for the pasta forward but untested here.
 - Nested containers (podman-in-podman) — deliberately out of scope.
+
+## Agent capability boundary (audited)
+
+The sandbox exists so an agent can run unattended without being able to push to
+GitHub or write to cloud storage. Those are the two hard requirements. This
+section records what was audited, what was found, and what changed.
+
+### GitHub: agents cannot push
+
+Verified against the running image, not assumed:
+
+| path | result |
+|---|---|
+| `~/.ssh` | absent |
+| `SSH_AUTH_SOCK` | unset |
+| `~/.git-credentials` | absent |
+| `~/.netrc` | absent |
+| `gh` binary | absent |
+| `GH_TOKEN` / `GITHUB_TOKEN` | unset |
+| `~/.config/gh` | absent |
+| global `credential.helper` | none |
+| `credential.helper` in each mounted repo | none |
+| remote URLs in mounted repos | plain https, no embedded tokens |
+| `git push --dry-run` from inside | `fatal: could not read Username` |
+
+The host `~/.gitconfig` is deliberately never mounted, because it carries
+`credential.helper = !gh auth git-credential`. Only `user.name` and `user.email`
+are forwarded, so commits are attributed but unpushable.
+
+`permissions.deny` also blocks `Bash(git push:*)`, `git remote set-url` and
+`git remote add`. Redundant today — there is nothing to authenticate with — but
+it makes the rule explicit rather than an accident of what happens not to be
+installed, so adding `gh` to the image later cannot silently grant push access.
+Deny rules are the only control that still applies in `bypassPermissions` mode,
+which is how this sandbox runs.
+
+### GCP: agents cannot write
+
+Verified in the image: no `gcloud`, no `gsutil`, no `bq`, no `~/.config/gcloud`,
+no `GOOGLE_APPLICATION_CREDENTIALS`, no `CLOUDSDK_*` variables, and neither
+`google.auth` nor `google.cloud.storage` importable. The only route to Terra/GCP
+is the host-side fiss-mcp server, reached over a loopback port forward.
+
+**A real gap was found here and fixed.** `download_gcs_file` is classified
+upstream as a read tool and therefore carries no `_check_write_access` guard, so
+`FISS_MCP_ALLOW_WRITES=0` did not block it. But it takes an agent-supplied
+`local_path` (documented as "Absolute local destination path"), calls
+`os.makedirs(parent, exist_ok=True)` and then `blob.download_to_filename()` —
+all host-side, as the invoking user. An agent could create directories and
+overwrite files anywhere that user can write: shell rc files, git config, the ssh
+directory, the checkout, another user's tree where permissions allowed. That is a
+filesystem write primitive *outside* the sandbox, a stronger capability than the
+bucket writes `FISS_MCP_ALLOW_WRITES` exists to gate.
+
+All 21 tools were audited for `download_to_filename`, `os.makedirs` and
+`open(..., "w")`. `download_gcs_file` is the only one that writes to the host, and
+was the only write-capable tool that was ungated.
+
+Two independent mitigations, because one of them is a config value someone could
+flip:
+
+1. `host_fiss_mcp/run-server.py` removes the tool at startup via
+   `FastMCP.remove_tool`, unless `FISS_MCP_ALLOW_HOST_WRITES=1`. Verified over
+   the wire: `tools/list` returns 20 rather than 21, and a direct call gets
+   `Unknown tool: 'download_gcs_file'`. A removal failure is fatal — the server
+   refuses to start rather than start weaker than advertised.
+2. `permissions.deny` blocks `mcp__fiss-mcp__download_gcs_file` plus the five
+   Terra write tools.
+
+Agents needing file contents use `read_gcs_object`, which returns bytes over MCP
+and writes nothing.
+
+### Known residual: the GCE metadata server
+
+On a GCE VM the container can route to `169.254.169.254` — pasta installs a
+default route that carries link-local, confirmed with `ip route get` from inside a
+container. An agent can therefore request the VM service account access token.
+
+This does **not** breach the no-bucket-writes requirement: the attached service
+account's storage scope is `devstorage.read_only`. But it is a cloud credential
+the agent was never meant to hold, and the scope list also includes
+`logging.write`, `monitoring.write` and `pubsub`.
+
+Confirm on the VM, from inside a container:
+
+    curl -s -H "Metadata-Flavor: Google" \
+      http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token
+
+The fix is to remove the credential rather than block the route, which a rootless
+container cannot do without CAP_NET_ADMIN. Nothing in this design uses the VM
+service account — every user authenticates with their own ADC — so detach it:
+
+    gcloud compute instances stop  $VM --zone $ZONE
+    gcloud compute instances set-service-account $VM --zone $ZONE --no-service-account
+    gcloud compute instances start $VM --zone $ZONE
+
+### Operational note: shared settings do not propagate to existing users
+
+`provision-sandbox-user.sh` copies `claude-sandbox-shared/.claude` into each
+user's own tree and leaves it alone on re-runs, so changes to `settings.json` —
+including the deny rules above — do NOT reach users who were already
+provisioned. After changing shared settings, each existing user needs:
+
+    cp <checkout>/claude-sandbox-shared/.claude/settings.json \
+       /mnt/sandbox/users/$USER/shared/.claude/settings.json

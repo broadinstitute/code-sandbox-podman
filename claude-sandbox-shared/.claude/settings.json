@@ -86,7 +86,16 @@
       "Write(/home/claude/.claude/hooks/**)",
       "Edit(/home/claude/.claude/hooks/**)",
       "Write(/home/claude/.claude/settings.json)",
-      "Edit(/home/claude/.claude/settings.json)"
+      "Edit(/home/claude/.claude/settings.json)",
+      "mcp__fiss-mcp__download_gcs_file",
+      "mcp__fiss-mcp__submit_workflow",
+      "mcp__fiss-mcp__abort_submission",
+      "mcp__fiss-mcp__update_method_config",
+      "mcp__fiss-mcp__copy_method_config",
+      "mcp__fiss-mcp__upload_entities",
+      "Bash(git push:*)",
+      "Bash(git remote set-url:*)",
+      "Bash(git remote add:*)"
     ]
   }
 }
