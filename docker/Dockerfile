@@ -73,13 +73,30 @@ RUN userdel -r node 2>/dev/null || true && \
     chmod 440 /etc/sudoers.d/claude && \
     chown -R claude:claude /usr/local/cargo /usr/local/rustup
 
-RUN python3 -m venv /opt/claude-venv && \
-    /opt/claude-venv/bin/pip install --no-cache-dir --upgrade pip && \
-    /opt/claude-venv/bin/pip install --no-cache-dir \
+# uv, pinned, copied from Astral's published image. Preferred over `curl | sh`
+# (no network fetch inside a RUN layer) and over `pip install uv` (no pip
+# bootstrap, which is the thing we are removing). Bump this tag to update uv.
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /usr/local/bin/
+
+# Python environment, built by uv rather than `python3 -m venv` + pip.
+#
+# uv fetches its own pinned CPython into UV_PYTHON_INSTALL_DIR, so the venv no
+# longer inherits whatever python3 the base image happens to ship. That matters:
+# the base is Debian bookworm (python 3.11 today), and a base-image bump could
+# silently move the interpreter under the whole scientific stack. Pinning it
+# here makes the image reproducible in the same way CLAUDE_CODE_VERSION and
+# CODEGRAPH_VERSION already are.
+#
+# 3.12 specifically, to match the interpreter host_fiss_mcp/install.sh pins —
+# one Python version across host and container is one less thing to reason about.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python \
+    CLAUDE_VENV_PYTHON=3.12
+RUN uv venv --python "${CLAUDE_VENV_PYTHON}" /opt/claude-venv && \
+    uv pip install --python /opt/claude-venv/bin/python --no-cache \
       numpy pandas matplotlib scipy scikit-learn seaborn \
       ipython jupyter requests \
       "headroom-ai[proxy]==0.24.0" && \
-    chown -R claude:claude /opt/claude-venv
+    chown -R claude:claude /opt/claude-venv /opt/uv-python
 
 # fiss-mcp lives on the HOST, not in the container. The launcher
 # (run_claude_docker.sh) spawns it before docker run, passes the URL in via
@@ -94,7 +111,9 @@ RUN python3 -m venv /opt/claude-venv && \
 # world-writable perms baked at build time, the entrypoint can skip the chown
 # entirely. Container is single-user (claude) so loosening perms here doesn't
 # expand attack surface.
-RUN chmod -R a+rwX /opt/claude-venv /usr/local/cargo /usr/local/rustup
+# /opt/uv-python is included: the venv symlinks its interpreter out of there, so
+# it has to be traversable by whatever uid the container ends up running as.
+RUN chmod -R a+rwX /opt/claude-venv /opt/uv-python /usr/local/cargo /usr/local/rustup
 
 ENV JAVA_HOME=/opt/java/openjdk \
     PATH=/opt/claude-venv/bin:/usr/local/cargo/bin:/opt/java/openjdk/bin:$PATH

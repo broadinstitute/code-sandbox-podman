@@ -9,8 +9,13 @@ local filesystem isolation. The container sees only a designated workspace
 directory and its own persistent state — the host's home directory, `/etc`, and
 everything else on the host stay invisible to the agent.
 
-The image is a batteries-included dev environment, so `pip install`,
+The image is a batteries-included dev environment, so `uv pip install`,
 `cargo install`, and `sudo apt install` work without network delay on launch.
+
+Python is managed entirely by **uv**. The venv at `/opt/claude-venv` is built
+with `uv venv` against a uv-pinned CPython 3.12 rather than the base image's
+python3, and there is no pip anywhere in the toolchain — on the host or in the
+container.
 
 > **This fork is podman-only.** It is a fork of
 > [jonn-smith/claude-docker-sandbox](https://github.com/jonn-smith/claude-docker-sandbox),
@@ -632,11 +637,11 @@ The interactive launcher (`start_sandbox.sh`) shows a one-line `RO mounts` summa
 - **Per-instance mode** — everything in `$SANDBOX_HOME` (settings + state + sessions + caches), preserved across runs of that instance only.
 - **Shared mode** — settings, skills, plugins, hooks, memory, sessions, plans, tasks, onboarding live in `$SHARED_HOME` (visible to all shared-mode instances). Cache, file-history, backups, shell-snapshots, session-env, history.jsonl stay per-instance.
 - **Shared with the host**: OAuth credentials (single token refreshed by whichever process needs it first).
-- **Ephemeral** (gone on `--rm` container exit): anything written outside the mounts — `pip install`, `cargo install`, `sudo apt install`, files in `/tmp`, etc. If you want these to persist, either rebuild the image with them baked in, or add the relevant directories (e.g. `/opt/claude-venv`, `/usr/local/cargo`) as additional mounts.
+- **Ephemeral** (gone on `--rm` container exit): anything written outside the mounts — `uv pip install`, `cargo install`, `sudo apt install`, files in `/tmp`, etc. If you want these to persist, either rebuild the image with them baked in, or add the relevant directories (e.g. `/opt/claude-venv`, `/usr/local/cargo`) as additional mounts.
 
 ## Customization
 
-- **Add Python packages**: extend the `pip install` line in the `Dockerfile` and rebuild. Pin versions there if you want reproducibility (`numpy==1.26.4`, etc.).
+- **Add Python packages**: extend the `uv pip install` line in the `Dockerfile` and rebuild. Pin versions there if you want reproducibility (`numpy==1.26.4`, etc.).
 - **Add system packages**: extend the `apt-get install` line.
 - **Switch Java versions**: change the `FROM eclipse-temurin:17-jdk AS temurin` line to e.g. `21-jdk`.
 - **Rust channels**: change `--default-toolchain stable` to `nightly` or a specific version.
