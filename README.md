@@ -479,13 +479,28 @@ Without linger, systemd tears down your user slice at logout and kills a
 long-running agent mid-task. The `/etc/subuid` range is the one that fails most
 confusingly if absent, which is why the script checks it first.
 
-**2. Google Cloud.** Both commands print a URL: open it on your laptop, paste
-the code back. `--no-launch-browser` because the VM is headless.
+**2. Google Cloud.** Both commands print a URL: open it on your laptop and paste
+the code **into the browser**. `--no-launch-browser` because the VM is headless.
 
 ```bash
 gcloud auth login --no-launch-browser
 gcloud auth application-default login --no-launch-browser
 ```
+
+On a GCE VM the second command interrupts with a confirmation:
+
+```
+You are running on a Google Compute Engine virtual machine.
+The service credentials associated with this virtual machine
+will automatically be used by Application Default Credentials,
+so it is not necessary to use this command.
+Do you want to continue (Y/n)?
+```
+
+**Answer `Y`.** The advice is wrong for this use. The VM's service account is a
+different identity with narrow scopes, and it is not what has access to your
+Terra workspaces — fiss-mcp needs *your* credentials, read from your own
+`~/.config/gcloud`.
 
 Then set your project in `env.<USER>.sh`:
 
@@ -493,15 +508,18 @@ Then set your project in `env.<USER>.sh`:
 export CLAUDE_SANDBOX_GCP_PROJECT=<project where you have serviceusage.services.use>
 ```
 
-Without it, fiss-mcp's four GCS tools fail with `Project was not passed and could
-not be determined from the environment`. Note that
-`gcloud auth application-default set-quota-project` does **not** satisfy this —
-it sets `quota_project_id`, but `google.auth.default()` still returns
-`project=None`.
+Do this **even though** gcloud finishes by reporting
+`Quota project "..." was added to ADC`. That sets `quota_project_id`, which is
+not a project source: `google.auth.default()` still returns `project=None`, and
+fiss-mcp's four GCS tools fail with `Project was not passed and could not be
+determined from the environment`. The same applies to
+`gcloud auth application-default set-quota-project` — measured with
+`quota_project_id` populated, not assumed.
 
 **3. GitHub** (skip if you never push from this host):
 
 ```bash
+command -v gh || sudo apt-get install -y gh    # not on a minimal Debian image
 gh auth login --web
 ```
 

@@ -100,6 +100,18 @@ else
     warn "memory controller not delegated — CLAUDE_SANDBOX_MEMORY will be ignored"
 fi
 
+# Optional, but the closing message tells the user to run both, so a missing
+# binary belongs here rather than surfacing as "command not found" three steps
+# later.
+for b in gcloud gh; do
+    if command -v "$b" >/dev/null 2>&1; then
+        ok "$b present"
+    else
+        warn "$b not installed — needed for the auth steps printed at the end."
+        warn "  install with: sudo apt-get install -y $b"
+    fi
+done
+
 if [[ ! -d "$SANDBOX_ROOT" ]]; then
     fatal "$SANDBOX_ROOT does not exist. The admin must format and mount the"
     echo "          data disk first (README, GCP VM section)."
@@ -268,17 +280,34 @@ cat <<EOF
        gcloud auth login --no-launch-browser
        gcloud auth application-default login --no-launch-browser
 
-     Both print a URL. Open it on your laptop, paste the code back. Then set
-     CLAUDE_SANDBOX_GCP_PROJECT in ${ENV_FILE}
-     to a project where you have serviceusage.services.use — without it the
-     fiss-mcp GCS tools fail with "Project was not passed".
+     Both print a URL. Open it on your laptop, paste the code back.
+
+     On a GCE VM the second command warns that it is "not necessary" because the
+     VM's service credentials would be used automatically, and asks to confirm.
+     Answer Y. The VM's service account is not you: it is a different identity
+     with narrow scopes, and it is not what has access to your Terra workspaces.
+     fiss-mcp needs YOUR credentials.
+
+     Then set CLAUDE_SANDBOX_GCP_PROJECT in
+     ${ENV_FILE}
+     to a project where you have serviceusage.services.use.
+
+     Do this even though gcloud reports 'Quota project "..." was added to ADC'.
+     That sets quota_project_id, which is NOT a project source:
+     google.auth.default() still returns project=None, and the fiss-mcp GCS tools
+     fail with "Project was not passed and could not be determined from the
+     environment". Measured, not assumed.
 
   2. GitHub, if you want to push from this host:
 
+       command -v gh || sudo apt-get install -y gh
        gh auth login --web
 
      Prints a one-time code; open the URL on your laptop. This also configures
      git's credential helper, so HTTPS pushes work afterwards.
+
+     Paste the code into the BROWSER, not into a chat or a terminal log — it is
+     single-use credential material.
 
      Note: this authenticates YOU on the host. The sandbox container carries no
      git credentials by design, so \`git push\` from inside it cannot succeed.
