@@ -177,6 +177,24 @@ resolve_host_bind_ip() {
     printf '%s' "$ip"
 }
 
+# Pick the first free TCP port at or after $2 on $1, scanning up to $3 slots.
+# Prints the port, or returns 1 if none is free.
+#
+# Multi-user hosts need the scan. The base port is hashed, and a hash over a
+# 1000-slot space collides at a rate no amount of care avoids; the previous
+# behaviour was to print "already in use" and exit, which on a shared box turns
+# one unlucky hash into a user who simply cannot launch.
+find_free_port() {
+    local host="$1" base="$2" span="${3:-32}" p
+    for (( p = base; p < base + span; p++ )); do
+        if ! (echo > "/dev/tcp/${host}/${p}") 2>/dev/null; then
+            printf '%s' "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Record a host port that the container must be able to reach, and set
 # REGISTERED_HOSTNAME to the hostname the container should use to reach it.
 # On the podman path this queues a pasta forward and yields 127.0.0.1;
@@ -615,7 +633,12 @@ cleanup_host_services() { cleanup_host_fiss; cleanup_host_vertex; }
 trap cleanup_host_services EXIT INT TERM
 
 if [[ "$FISS_MCP_ENABLED" == "1" ]]; then
-  INSTALL_ROOT="${SCRIPT_DIR}/host_fiss_mcp"
+  # fiss-mcp source (install.sh, run-server.py) is repo content and may be
+  # read-only. Its state (the venv and the pinned clone) is per-user and must
+  # be writable, so on a shared host they are different paths. Defaults keep
+  # both inside the checkout, which is the single-user layout unchanged.
+  FISS_SRC_DIR="${SCRIPT_DIR}/host_fiss_mcp"
+  FISS_STATE_DIR="${CLAUDE_SANDBOX_FISS_ROOT:-$FISS_SRC_DIR}"
   # Warn loudly rather than let every GCS tool fail at call time with an
   # opaque OSError from deep inside google-cloud-storage.
   if [[ -z "${CLAUDE_SANDBOX_GCP_PROJECT:-}" ]]; then
@@ -629,16 +652,23 @@ if [[ "$FISS_MCP_ENABLED" == "1" ]]; then
     echo "${YEL}          serviceusage.services.use.${RST}"
   fi
 
-  if [[ ! -x "${INSTALL_ROOT}/venv/bin/python" || ! -f "${INSTALL_ROOT}/run-server.py" ]]; then
-    echo "ERROR: fiss-mcp host install not found at ${INSTALL_ROOT}." >&2
-    echo "       Run ./setup_host.sh on this machine first to install it," >&2
+  if [[ ! -x "${FISS_STATE_DIR}/venv/bin/python" ]]; then
+    echo "ERROR: fiss-mcp venv not found at ${FISS_STATE_DIR}/venv." >&2
+    echo "       Run ./setup_host.sh on this machine first to build it," >&2
     echo "       or export FISS_MCP=0 to launch without Terra access." >&2
     exit 1
   fi
+  if [[ ! -f "${FISS_SRC_DIR}/run-server.py" ]]; then
+    echo "ERROR: fiss-mcp launcher missing at ${FISS_SRC_DIR}/run-server.py." >&2
+    echo "       The checkout looks incomplete." >&2
+    exit 1
+  fi
 
-  # Per-instance port so concurrent sandboxes don't collide. Hash the
-  # instance name into 39000-39999. Override with FISS_MCP_PORT.
-  PORT_OFFSET=$(printf '%s' "${CLAUDE_SANDBOX_INSTANCE}" | cksum | awk '{print $1 % 1000}')
+  # Per-user, per-instance port so concurrent sandboxes don't collide. The uid
+  # is mixed into the hash: on a shared host every user tends to run instance
+  # "main", so hashing the instance name alone gave them all the same port and
+  # only the first to launch would get it.
+  PORT_OFFSET=$(printf '%s:%s' "$(id -u)" "${CLAUDE_SANDBOX_INSTANCE}" | cksum | awk '{print $1 % 1000}')
   HOST_FISS_PORT="${FISS_MCP_PORT:-$((39000 + PORT_OFFSET))}"
   HOST_FISS_PATH="/mcp/"
 
@@ -650,10 +680,21 @@ if [[ "$FISS_MCP_ENABLED" == "1" ]]; then
     exit 1
   fi
 
-  if (echo > "/dev/tcp/${HOST_BIND_IP}/${HOST_FISS_PORT}") 2>/dev/null; then
-    echo "fiss-mcp: ${HOST_BIND_IP}:${HOST_FISS_PORT} already in use." >&2
-    echo "          Set FISS_MCP_PORT to a free port or stop the conflicting process." >&2
-    exit 1
+  # Only scan when the port was derived. An explicit FISS_MCP_PORT is honoured
+  # exactly, and still fails loudly if taken, because silently moving a port the
+  # operator pinned would be worse than refusing.
+  if [[ -n "${FISS_MCP_PORT:-}" ]]; then
+    if (echo > "/dev/tcp/${HOST_BIND_IP}/${HOST_FISS_PORT}") 2>/dev/null; then
+      echo "fiss-mcp: ${HOST_BIND_IP}:${HOST_FISS_PORT} already in use." >&2
+      echo "          FISS_MCP_PORT was set explicitly, so it is not moved." >&2
+      exit 1
+    fi
+  else
+    if ! HOST_FISS_PORT=$(find_free_port "${HOST_BIND_IP}" "${HOST_FISS_PORT}" 32); then
+      echo "fiss-mcp: no free port in 32 slots from the derived base." >&2
+      echo "          Set FISS_MCP_PORT explicitly." >&2
+      exit 1
+    fi
   fi
 
   HOST_FISS_LOG="${SANDBOX_HOME}/.claude/host_fiss_mcp.log"
@@ -699,7 +740,7 @@ if [[ "$FISS_MCP_ENABLED" == "1" ]]; then
   fi
 
   nohup env "${FISS_ENV[@]}" \
-    "${INSTALL_ROOT}/venv/bin/python" "${INSTALL_ROOT}/run-server.py" \
+    "${FISS_STATE_DIR}/venv/bin/python" "${FISS_SRC_DIR}/run-server.py" \
     > "${HOST_FISS_LOG}" 2>&1 &
   HOST_FISS_PID=$!
 
@@ -772,7 +813,7 @@ if [[ "$VERTEX_ENABLED" == "1" ]]; then
 
   # Per-instance port in the 38000-38999 range so concurrent sandboxes don't
   # collide. Hashed from the instance name. Disjoint from fiss-mcp's 39xxx.
-  VERTEX_PORT_OFFSET=$(printf '%s' "${CLAUDE_SANDBOX_INSTANCE}" | cksum | awk '{print $1 % 1000}')
+  VERTEX_PORT_OFFSET=$(printf '%s:%s' "$(id -u)" "${CLAUDE_SANDBOX_INSTANCE}" | cksum | awk '{print $1 % 1000}')
   HOST_VERTEX_PORT="${VERTEX_PROXY_PORT:-$((38000 + VERTEX_PORT_OFFSET))}"
 
   # Same bind-IP rules as fiss-mcp — see resolve_host_bind_ip at the top.

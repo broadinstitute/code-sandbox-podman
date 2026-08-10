@@ -205,6 +205,183 @@ the full reasoning and the measurements behind each row.
 
 - No host-side Claude Code install required. Each sandbox prompts `/login` on its own first launch and stores the resulting OAuth token inside its own state dir (`claude-sandbox-shared/.claude/.credentials.json` in shared mode, `claude-sandbox-persistent-state-<INSTANCE>/.claude/.credentials.json` in per-instance mode). The host's `~/.claude/` is NOT mounted into the container.
 
+## Running on a GCP VM (multi-user)
+
+Verified end to end on `warp-pipeline-dev`. Every value below was checked against
+a real deployment rather than copied from Google's docs.
+
+### Why Debian 13 and not 12
+
+The host needs **podman >= 5** with a current **pasta**. Debian 12 (bookworm)
+ships podman **4.3.1** (`libpod 4.3.1+ds1-8+deb12u1`) and a passt snapshot from
+March 2023, so `setup_host.sh` refuses it and the launcher's
+`--network=pasta:-T,<port>` forward does not exist. Debian 13 (trixie) ships
+podman **5.4.2** and current passt, and has no SELinux to relabel mounts for.
+
+RHEL 10 / Rocky 10 also satisfy the version requirement, but SELinux is
+enforcing there and the bind mounts would need `:z`, which this fork does not
+handle yet. Fedora Cloud is not in GCP's standard image projects.
+
+### Disk: a separate data disk is mandatory, not optional
+
+The image is **8.08 GiB**. A default 10 GB boot disk leaves ~6.4 GB free, so it
+does not fit at all — and `make rebuild` transiently needs room for a second
+copy. Create the data disk **independently of the instance** so it survives a
+VM rebuild:
+
+```bash
+gcloud compute disks create sandbox-data \
+  --zone us-central1-c --size 200GB --type pd-balanced
+```
+
+Sizing: `8 GB image + 8 GB rebuild headroom + ~2 GB per user`. Measured per-user
+footprint is fiss-mcp venv 122 MB, uv's pinned Python 112 MB, checkout 33 MB,
+plus workspaces and session transcripts (one real session was 3.8 MB). 200 GB
+covers 10-20 users comfortably; 100 GB is the floor. Use `pd-balanced` rather
+than `pd-standard` — IOPS scale with size, and image builds plus CodeGraph
+indexing are IO-bound.
+
+### Create the instance
+
+```bash
+gcloud compute instances create warp-claude-sandbox-2 \
+  --zone us-central1-c \
+  --machine-type e2-highmem-8 \
+  --image-family debian-13 --image-project debian-cloud \
+  --boot-disk-size 50GB --boot-disk-type pd-balanced \
+  --network warp-firewall-network --subnet warp-firewall-network \
+  --disk name=sandbox-data,device-name=sandbox-data,mode=rw,auto-delete=no
+```
+
+Notes that cost real debugging time:
+
+* **`--network` / `--subnet` are required** if the project has no `default`
+  network. Without them the create fails with
+  `Invalid value for field 'resource.networkInterfaces[0].network' ... cannot be
+  found`. Copy the values from a working instance:
+  `gcloud compute instances describe <vm> --format="yaml(networkInterfaces)"`.
+* **`auto-delete=no`** on the data disk. This is what makes future VM rebuilds
+  cheap: delete the instance, keep the data.
+* **50 GB boot, not 10.** Home directories live on the boot disk.
+* **Keep the external IP.** There is no Cloud NAT in this project (no routers at
+  all), so a `--no-address` instance would have no outbound internet, and the
+  sandbox needs egress for npm, pip, GitHub and the Anthropic API. The org
+  firewall policy does permit the IAP range, so
+  `gcloud compute ssh --tunnel-through-iap` works — but only with an external IP
+  present, absent a NAT.
+* The instance gets a **fresh ephemeral IP**. Reserve one with
+  `gcloud compute addresses create ... --region us-central1` and pass
+  `--address` if several people will be connecting.
+
+### Format and mount the data disk
+
+Attaching a disk does not format or mount it. Do this once:
+
+```bash
+# The boot disk may enumerate as /dev/sdb, putting the data disk on /dev/sda.
+# The by-id path is stable, so device order does not matter.
+lsblk; ls -l /dev/disk/by-id/google-sandbox-data
+
+sudo mkfs.ext4 -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard \
+  /dev/disk/by-id/google-sandbox-data
+
+sudo mkdir -p /mnt/sandbox
+echo "UUID=$(sudo blkid -s UUID -o value /dev/disk/by-id/google-sandbox-data) \
+/mnt/sandbox ext4 discard,defaults,nofail 0 2" | sudo tee -a /etc/fstab
+sudo mount -a && df -h /mnt/sandbox
+
+sudo mkdir -p /mnt/sandbox/users
+sudo chmod 751 /mnt/sandbox /mnt/sandbox/users   # traversable, not listable
+```
+
+`nofail` is deliberate: without it a missing or renamed disk wedges boot, which
+is painful on a box where you may only have root.
+
+### SSH access and firewall
+
+Check the **effective** firewalls, not just the VPC rules —
+`gcloud compute firewall-rules list` does not show org-level policies:
+
+```bash
+gcloud compute instances network-interfaces get-effective-firewalls \
+  <vm> --zone <zone> --network-interface nic0
+```
+
+On this org an **org-level firewall policy** allows ingress from the
+institution's IP ranges and from the IAP range `35.235.240.0/20`, with **no
+target tags**, so it covers every VM. That is why the instances here carry no
+network tags even though the VPC-level tcp:22 rule requires a `broad-allow`
+tag — that rule is redundant. Do not assume tags are unnecessary on another org
+without running the command above.
+
+### Users
+
+Access is by **project metadata SSH keys**, which is also what makes rootless
+podman work:
+
+```bash
+gcloud compute project-info add-metadata \
+  --metadata-from-file ssh-keys=all-keys.txt
+```
+
+The Google guest agent creates each key's user with `useradd`, and `useradd`
+allocates `/etc/subuid` + `/etc/subgid` ranges from `login.defs`. Rootless
+podman requires those ranges. Confirm for any user with:
+
+```bash
+grep "^$USER:" /etc/subuid /etc/subgid     # e.g. rcox:624288:65536
+```
+
+**Do not switch to OS Login for this.** OS Login users resolve through NSS with
+no `/etc/passwd` entry, so they get **no subuid ranges** and rootless podman
+fails for them. There is no clean upstream fix: shadow-utils >= 4.9 supports a
+pluggable `subid:` NSS database, but the only shipped provider is SSSD's
+`libsubid_sss.so`, which needs FreeIPA/LDAP; podman has ignored `subid: sss`
+outright in some versions (containers/podman#25041); and Red Hat documents that
+enabling NSS subid *breaks* rootless podman for local users
+(access.redhat.com/solutions/6961540). Making OS Login work would mean a
+`pam_exec` hook allocating ranges at first login — workable, but a broken PAM
+stack locks everyone out.
+
+### First login: authenticate to GCP yourself
+
+Each user does this once, on the VM. Nothing is automated and no credential is
+ever baked into the image or the container:
+
+```bash
+gcloud auth login --no-launch-browser
+gcloud auth application-default login --no-launch-browser
+```
+
+`--no-launch-browser` because the VM is headless: gcloud prints a URL, you
+complete it in a browser on your laptop, and paste the code back.
+
+Then set the project used by fiss-mcp's GCS tools, which need a project and do
+**not** get one from `set-quota-project` (see the fiss-mcp section):
+
+```bash
+export CLAUDE_SANDBOX_GCP_PROJECT=<a project where you have serviceusage.services.use>
+```
+
+Claude Code itself is authenticated separately, with `/login` inside the
+container on first launch. The host's `~/.claude` is never mounted.
+
+### Capacity, not disk, is the real limit
+
+`e2-highmem-8` is 8 vCPU / 64 GB. At the default `CLAUDE_SANDBOX_MEMORY=16g`
+that is about **3 concurrent sandboxes** before the host is oversubscribed. For
+more simultaneous users drop the per-user cap to `8g` or size the machine up —
+a config change, not a rebuild. Confirm the cap is actually enforced, because
+without cgroup v2 delegation the flag is silently ignored:
+
+```bash
+cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers
+# must list `memory`
+```
+
+Also run `loginctl enable-linger $USER` so a user's containers and their
+host-side fiss-mcp survive their SSH session closing.
+
 ## Build
 
 ```bash

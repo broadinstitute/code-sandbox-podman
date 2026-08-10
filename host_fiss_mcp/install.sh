@@ -10,9 +10,18 @@
 # checkout). Re-run any time; skips work that is already done.
 set -euo pipefail
 
-INSTALL_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-SRC_DIR="${INSTALL_ROOT}/fiss-mcp"
-VENV_DIR="${INSTALL_ROOT}/venv"
+# Source dir: where this script and run-server.py live. Repo content, and on a
+# shared multi-user host it may be a read-only checkout.
+SRC_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# State dir: the venv and the pinned clone, both writable and per-user.
+# CLAUDE_SANDBOX_FISS_ROOT moves them off a read-only checkout; unset keeps the
+# original single-user layout with everything inside the repo.
+STATE_ROOT="${CLAUDE_SANDBOX_FISS_ROOT:-$SRC_ROOT}"
+mkdir -p "$STATE_ROOT"
+
+SRC_DIR="${STATE_ROOT}/fiss-mcp"
+VENV_DIR="${STATE_ROOT}/venv"
 REPO_URL="https://github.com/broadinstitute/fiss-mcp.git"
 
 # Pinned release. Bump together with anything that depends on new fiss-mcp
@@ -140,4 +149,4 @@ if ! "${VENV_DIR}/bin/python" -c 'import terra_mcp.server' 2>/dev/null; then
   exit 1
 fi
 
-echo "host_fiss_mcp: ready at ${INSTALL_ROOT}"
+echo "host_fiss_mcp: ready — venv ${VENV_DIR}, source ${SRC_ROOT}"
