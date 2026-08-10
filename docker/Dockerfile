@@ -11,11 +11,15 @@ FROM docker.io/library/node:22-slim
 
 ################################################################################
 
+# python3 is kept because assorted tooling shells out to it, but python3-pip
+# and python3-venv are deliberately absent: all Python in this image is managed
+# by uv, and leaving pip installed would leave a second, unmanaged way to
+# install packages into the system interpreter.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       git ca-certificates curl ripgrep vim sudo gosu jq wget \
       openssh-client \
-      python3 python3-pip python3-venv \
+      python3 \
       build-essential
 
 # For email notifications, docker-in-a-docker and other utils:
@@ -114,6 +118,32 @@ RUN uv venv --python "${CLAUDE_VENV_PYTHON}" /opt/claude-venv && \
 # /opt/uv-python is included: the venv symlinks its interpreter out of there, so
 # it has to be traversable by whatever uid the container ends up running as.
 RUN chmod -R a+rwX /opt/claude-venv /opt/uv-python /usr/local/cargo /usr/local/rustup
+
+# Remove ensurepip, which is what actually eliminates pip. There are TWO
+# interpreters in this image and both ship it:
+#
+#   /usr/bin/python3            Debian's, from the python3 apt package
+#   /opt/uv-python/*/bin/python uv's pinned CPython, which /opt/claude-venv uses
+#
+# Dropping the python3-pip / python3-venv apt packages is not sufficient. With
+# only that change, `pip`, `pip3` and `python3 -m pip` were all absent, yet
+# `python3 -m venv <dir>` still succeeded and seeded a working pip INTO the new
+# venv — pip was one command away rather than gone.
+#
+# Targeting only /usr/lib/python3* is also not sufficient, and is easy to get
+# wrong: ENV PATH below puts /opt/claude-venv/bin first, so at RUNTIME `python3`
+# is uv's 3.12, while during THIS build the ENV is not yet set and `python3` is
+# Debian's. A check written as `python3 -m ensurepip` inside this layer therefore
+# tests a different interpreter than the one a user gets. Hence the explicit
+# absolute paths below.
+#
+# Nothing needs ensurepip: uv builds environments without it.
+RUN rm -rf /usr/lib/python3*/ensurepip \
+           /usr/lib/python3/dist-packages/pip* \
+           /opt/uv-python/*/lib/python3*/ensurepip && \
+    ! /usr/bin/python3 -m ensurepip --version >/dev/null 2>&1 && \
+    ! /opt/claude-venv/bin/python -m ensurepip --version >/dev/null 2>&1 && \
+    echo "ensurepip removed from both interpreters"
 
 ENV JAVA_HOME=/opt/java/openjdk \
     PATH=/opt/claude-venv/bin:/usr/local/cargo/bin:/opt/java/openjdk/bin:$PATH

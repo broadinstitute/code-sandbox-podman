@@ -108,7 +108,11 @@ for d in "${USER_ROOT}/workspace" "${USER_ROOT}/state" "${USER_ROOT}/shared" \
     fi
 done
 chmod 700 "$USER_ROOT"
-ok "chmod 700 ${USER_ROOT} (other users cannot read your workspace)"
+ok "chmod 700 ${USER_ROOT}"
+warn "700 stops other users reading this directly, but NOT via sudo. On a GCP"
+warn "VM every metadata-SSH-key user is in google-sudoers, so anyone who can log"
+warn "in can read your Claude token and gcloud credentials. Treat co-users as"
+warn "trusted, or restrict who has a key."
 
 # Seed the shared-state dir from the repo so this user gets working hooks,
 # settings and the vendored plugins. Copied, not symlinked: the container mounts
@@ -140,6 +144,53 @@ else
         -e "s|__USER__|${USER}|g" \
         "${REPO_ROOT}/env.gcp.example.sh" > "$ENV_FILE"
     ok "checkout is read-only; wrote ${ENV_FILE}"
+fi
+
+# ------------------------------------------------------- shared image store --
+echo
+echo "=== container image store ==="
+IMAGE_STORE="${CLAUDE_SANDBOX_IMAGE_STORE:-${SANDBOX_ROOT}/imagestore}"
+STORAGE_CONF="${HOME}/.config/containers/storage.conf"
+
+if [[ -d "$IMAGE_STORE" ]]; then
+    if [[ -e "$STORAGE_CONF" ]] && grep -q "additionalimagestores" "$STORAGE_CONF"; then
+        ok "storage.conf already references an additional image store"
+    else
+        if [[ -e "$STORAGE_CONF" ]]; then
+            cp -a "$STORAGE_CONF" "${STORAGE_CONF}.bak"
+            warn "existing storage.conf backed up to $(basename "${STORAGE_CONF}").bak"
+        fi
+        mkdir -p "$(dirname "$STORAGE_CONF")"
+        cat > "$STORAGE_CONF" <<CONF
+# Written by scripts/provision-sandbox-user.sh.
+#
+# The sandbox image is ~8.3 GB. additionalimagestores exposes one shared,
+# root-populated copy read-only, so this account does not hold its own — with an
+# empty graphroot plus the shared store, podman lists the image as
+# ReadOnly=true, runs it without copying, and the local graphroot stays tiny.
+#
+# Consequence, and it is intended: you cannot rebuild or modify the image. An
+# admin owns it via scripts/build-shared-image.sh, so everyone provably runs the
+# same one.
+[storage]
+driver = "overlay"
+
+[storage.options]
+additionalimagestores = [ "${IMAGE_STORE}" ]
+CONF
+        ok "wrote ${STORAGE_CONF} -> ${IMAGE_STORE}"
+    fi
+
+    if podman images --format '{{.Repository}}' 2>/dev/null | grep -q claude-sandbox; then
+        ok "claude-sandbox image visible from the shared store"
+    else
+        warn "shared store exists but no claude-sandbox image is visible."
+        warn "An admin may still need to run: sudo ./scripts/build-shared-image.sh"
+    fi
+else
+    warn "no shared image store at ${IMAGE_STORE}."
+    warn "You will need your own copy of the image (~8.3 GB), or ask an admin to"
+    warn "run: sudo ./scripts/build-shared-image.sh"
 fi
 
 # ---------------------------------------------------------------- linger ----
