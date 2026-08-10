@@ -326,9 +326,24 @@ The fix is to remove the credential rather than block the route, which a rootles
 container cannot do without CAP_NET_ADMIN. Nothing in this design uses the VM
 service account — every user authenticates with their own ADC — so detach it:
 
-    gcloud compute instances stop  $VM --zone $ZONE
-    gcloud compute instances set-service-account $VM --zone $ZONE --no-service-account
+    # Run these from a machine that is NOT the VM -- a laptop, or Cloud Shell.
+    # The stop severs your own SSH session, and anything after it in the same
+    # shell never executes.
+    #
+    # --no-scopes is required alongside --no-service-account; gcloud rejects the
+    # command without it.
+    gcloud compute instances stop $VM --zone $ZONE
+    gcloud compute instances set-service-account $VM --zone $ZONE \
+        --no-service-account --no-scopes
     gcloud compute instances start $VM --zone $ZONE
+
+    # The external IP is ephemeral and changes across stop/start unless
+    # reserved. Reserve one first if people have it bookmarked:
+    #   gcloud compute addresses create <name> --region <region>
+    #
+    # Detaching the service account also stops the OS Config / ops agents from
+    # reporting, since they authenticate with it. Nothing in this sandbox uses
+    # it, but patch-management and VM metrics dashboards will go quiet.
 
 ### Operational note: shared settings do not propagate to existing users
 
