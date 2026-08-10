@@ -581,6 +581,94 @@ gcloud compute project-info add-metadata --metadata-from-file ssh-keys=keys.txt
 
 They then run the five steps above. No admin action beyond the key.
 
+### Rebuilding for more cores
+
+CPU is the ceiling, not RAM or disk. A live sandbox measures ~547 MB resident but
+~147% CPU at startup, so on 8 vCPU roughly **five** concurrent sandboxes saturate
+the host — fewer when people run parallel subagents, since Task fan-out multiplies
+CPU rather than memory. When you hit that, add cores.
+
+`gcloud compute instances set-machine-type` can resize in place, but it requires a
+stop/start regardless. Since you are taking an outage anyway, a fresh instance is
+usually the better trade: you can also detach the service account and pin a static
+IP at create time, instead of as two further stop/start cycles.
+
+**What survives a rebuild is decided by which disk it lives on.** Everything the
+sandbox cares about is on the data disk, which is why it was created independently
+with `auto-delete=no`:
+
+| on the data disk — survives | on the boot disk — must be redone |
+|---|---|
+| the checkout at `/mnt/sandbox/repo` | apt packages (podman, passt, uidmap, …) |
+| the shared image store (~8.3 GB) | the system-wide `uv` binary |
+| every user's workspace and state | each user's `~/.config/gcloud` (re-auth) |
+| every user's Claude OAuth token | each user's `gh` auth |
+| every user's fiss-mcp venv | the `/etc/fstab` entry |
+| every user's `env.<USER>.sh` | `/etc/subuid` ranges (recreated by `useradd`) |
+
+So the expensive parts — the image build and each user's `/login` — do **not**
+repeat. What repeats is one apt line, one uv download, and each user's cloud
+logins.
+
+Run all of this from a laptop or Cloud Shell, **not from the VM**: the first
+command severs your own SSH session, and anything after it in the same shell never
+executes.
+
+```bash
+ZONE=us-central1-c
+OLD=warp-claude-sandbox-2
+NEW=warp-claude-sandbox-3
+
+# 1. A reserved IP, so the address stops changing on every rebuild.
+gcloud compute addresses create sandbox-ip --region "${ZONE%-*}"
+
+# 2. Release the data disk from the old instance, then delete it.
+gcloud compute instances stop "$OLD" --zone "$ZONE"
+gcloud compute instances detach-disk "$OLD" --zone "$ZONE" --disk sandbox-data
+gcloud compute instances delete "$OLD" --zone "$ZONE"
+
+# 3. Create the replacement with everything set correctly up front.
+gcloud compute instances create "$NEW" \
+  --zone "$ZONE" \
+  --machine-type n2-standard-16 \
+  --image-family debian-13 --image-project debian-cloud \
+  --boot-disk-size 50GB --boot-disk-type pd-balanced \
+  --network "$NETWORK" --subnet "$NETWORK" \
+  --address sandbox-ip \
+  --no-service-account --no-scopes \
+  --disk name=sandbox-data,device-name=sandbox-data,mode=rw,auto-delete=no
+```
+
+`--no-service-account --no-scopes` is worth doing here rather than later: the GCE
+metadata server is reachable from inside the container, so an attached service
+account is a cloud credential an agent can obtain. Doing it at create time costs
+nothing; doing it afterwards costs another stop/start. Both flags are required
+together — gcloud rejects `--no-service-account` on its own.
+
+Then on the new VM, once:
+
+```bash
+# Remount the data disk. Do NOT mkfs — it is already formatted and full of your
+# state. The UUID is unchanged; only the device letter may differ, which is
+# exactly why fstab keys on UUID.
+sudo mkdir -p /mnt/sandbox
+echo "UUID=$(sudo blkid -s UUID -o value /dev/disk/by-id/google-sandbox-data) \
+/mnt/sandbox ext4 discard,defaults,nofail 0 2" | sudo tee -a /etc/fstab
+sudo mount -a && findmnt /mnt/sandbox
+
+# Host packages and uv again — see "Admin: one-time host setup" above.
+```
+
+Each user then re-runs their own two cloud logins and relaunches. Their
+`provision-sandbox-user.sh` run is idempotent and safe to repeat; it will notice
+the existing directories and leave them alone, while recreating the
+`~/.config/containers/storage.conf` that lives on the replaced boot disk.
+
+Finally, check the per-user memory cap still makes sense. `CLAUDE_SANDBOX_MEMORY`
+defaults to `16g` in the template, which on a 64 GB host over-promises with more
+than three users. Measured usage is ~547 MB, so `4g` is generous and stops one
+user reserving a quarter of the machine.
+
 ### Capacity, not disk, is the real limit
 
 `e2-highmem-8` is 8 vCPU / 64 GB. At the default `CLAUDE_SANDBOX_MEMORY=16g`
