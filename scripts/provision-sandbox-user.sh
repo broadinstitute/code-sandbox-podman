@@ -196,8 +196,25 @@ IMAGE_STORE="${CLAUDE_SANDBOX_IMAGE_STORE:-${SANDBOX_ROOT}/imagestore}"
 STORAGE_CONF="${HOME}/.config/containers/storage.conf"
 
 if [[ -d "$IMAGE_STORE" ]]; then
+    # Treat a storage.conf that references the store but lacks mount_program as
+    # INCOMPLETE and rewrite it, rather than skipping. An earlier version of this
+    # script wrote the file without mount_program, and the result is not a
+    # cosmetic difference -- containers fail to start with
+    #   Error: creating container storage: error during chown: remove
+    #   usr/bin/bzcat: permission denied
+    # because a rootless consumer cannot chown layers written by rootful podman.
+    # Skipping on "additionalimagestores is present" left those users broken with
+    # no indication why, and re-running the script did not repair them.
+    if [[ -e "$STORAGE_CONF" ]] \
+       && grep -q "additionalimagestores" "$STORAGE_CONF" \
+       && ! grep -q "mount_program" "$STORAGE_CONF"; then
+        warn "storage.conf references the image store but has no mount_program."
+        warn "That combination fails at container start. Rewriting it."
+        rm -f "$STORAGE_CONF"
+    fi
+
     if [[ -e "$STORAGE_CONF" ]] && grep -q "additionalimagestores" "$STORAGE_CONF"; then
-        ok "storage.conf already references an additional image store"
+        ok "storage.conf already references an additional image store (with mount_program)"
     else
         if [[ -e "$STORAGE_CONF" ]]; then
             cp -a "$STORAGE_CONF" "${STORAGE_CONF}.bak"
