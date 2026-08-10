@@ -12,6 +12,14 @@
 # It deliberately does NOT authenticate anything. gcloud and GitHub logins are
 # interactive, belong to the user, and are listed at the end as the steps only
 # they can perform. No credential is read, written, copied or forwarded here.
+#
+# It also needs NO root. Everything it touches is either the user's own home or
+# their own directory under the data disk. That is a deliberate constraint: an
+# admin sets the host up once, and every user after that onboards themselves.
+# The only prerequisites that need root are the one-time host steps in the README
+# (packages, uv, the data disk, `chmod 1777` on users/, and building the shared
+# image store). This script checks each of those and names the exact command an
+# admin should run if one is missing, rather than failing obscurely.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -86,6 +94,20 @@ fi
 if [[ ! -d "$SANDBOX_ROOT" ]]; then
     fatal "$SANDBOX_ROOT does not exist. The admin must format and mount the"
     echo "          data disk first (README, GCP VM section)."
+elif [[ ! -d "${SANDBOX_ROOT}/users" ]]; then
+    fatal "${SANDBOX_ROOT}/users does not exist. One-time admin step:"
+    echo "            sudo mkdir -p ${SANDBOX_ROOT}/users"
+    echo "            sudo chmod 1777 ${SANDBOX_ROOT}/users"
+elif [[ ! -w "${SANDBOX_ROOT}/users" ]]; then
+    # This is the check that keeps user setup root-free. Without a writable
+    # parent, every new user would need an admin to mkdir for them.
+    fatal "${SANDBOX_ROOT}/users is not writable by you, so you cannot create"
+    echo "          your own directory. One-time admin step:"
+    echo "            sudo chmod 1777 ${SANDBOX_ROOT}/users"
+    echo "          The sticky bit means you can create your own directory but"
+    echo "          cannot remove or rename anyone else's."
+else
+    ok "${SANDBOX_ROOT}/users is writable — no root needed for your setup"
 fi
 
 if [[ "$FAIL" == "1" ]]; then

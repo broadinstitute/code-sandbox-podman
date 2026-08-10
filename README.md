@@ -296,11 +296,25 @@ echo "UUID=$(sudo blkid -s UUID -o value /dev/disk/by-id/google-sandbox-data) \
 sudo mount -a && df -h /mnt/sandbox
 
 sudo mkdir -p /mnt/sandbox/users
-sudo chmod 751 /mnt/sandbox /mnt/sandbox/users   # traversable, not listable
+sudo chmod 755  /mnt/sandbox
+sudo chmod 1777 /mnt/sandbox/users   # sticky, like /tmp
 ```
 
 `nofail` is deliberate: without it a missing or renamed disk wedges boot, which
 is painful on a box where you may only have root.
+
+**Why `1777` on `users/` and not something tighter.** It is the only thing that
+makes per-user setup self-service: each user creates their own
+`users/<name>/` directory, and the sticky bit stops them removing or renaming
+anyone else's. With `755` or `751` only root could create those directories, so
+onboarding every user would need an admin — which defeats the point.
+
+Each user's own directory is then `chmod 700` by
+`provision-sandbox-user.sh`. Note what that does and does not buy you: it stops
+casual reads by other users, but **not** reads via `sudo`. On a GCP VM every
+metadata-SSH-key user is placed in `google-sudoers`, so anyone who can log in can
+read another user's Claude token and gcloud credentials. Treat co-users as
+trusted, or control who has a key (see [SSH access](#ssh-access-and-firewall)).
 
 ### SSH access and firewall
 
@@ -420,8 +434,27 @@ cd /opt/code-sandbox-podman        # wherever the shared checkout lives
 ./scripts/provision-sandbox-user.sh
 ```
 
-It stops with an explanation if anything is missing — notably a `/etc/subuid`
-range, without which rootless podman cannot work at all.
+**No root, and no sudo.** Everything it touches is your own home or your own
+directory on the data disk. If a host-level prerequisite is missing it stops and
+prints the exact command an admin should run, rather than failing obscurely.
+
+What it does on your behalf, in case you want to check any of it by hand:
+
+```bash
+# keeps your containers and host-side fiss-mcp alive after you disconnect.
+# no root needed: polkit's set-self-linger defaults to allowing this.
+loginctl enable-linger $USER
+
+# must list `memory`, or CLAUDE_SANDBOX_MEMORY is silently ignored
+cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers
+
+# must print a range, e.g. rcox:624288:65536 — rootless podman cannot work without it
+grep "^$USER:" /etc/subuid /etc/subgid
+```
+
+Without linger, systemd tears down your user slice at logout and kills a
+long-running agent mid-task. The `/etc/subuid` range is the one that fails most
+confusingly if absent, which is why the script checks it first.
 
 **2. Google Cloud.** Both commands print a URL: open it on your laptop, paste
 the code back. `--no-launch-browser` because the VM is headless.
