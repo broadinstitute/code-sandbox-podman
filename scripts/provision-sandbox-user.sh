@@ -193,6 +193,40 @@ if [[ -e "$LEGACY_ENV" ]]; then
     warn "  the current one is ${ENV_FILE} -- delete the old one to avoid confusion"
 fi
 
+# ------------------------------------------------------------- staleness ----
+echo
+echo "=== checkout freshness ==="
+# The instructions printed at the end come from THIS checkout. If it is behind
+# its remote, a user follows outdated steps and hits problems that were already
+# fixed upstream -- which has happened repeatedly. Read-only check: fetch into
+# FETCH_HEAD without touching any branch, so it is safe for a user who does not
+# own the checkout.
+# Deliberately `ls-remote`, not `fetch`. A shared checkout is owned by the admin,
+# so a normal user has no write access to .git and `fetch` dies with
+# "cannot open '.git/FETCH_HEAD': Permission denied" — measured. That would make
+# this check useless for exactly the users who most need it. `ls-remote` queries
+# the remote and writes nothing locally.
+if [[ -d "${REPO_ROOT}/.git" ]]; then
+    _branch=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    _local=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)
+    _remote=$(git -C "$REPO_ROOT" ls-remote origin "refs/heads/${_branch}" 2>/dev/null | cut -f1)
+
+    if [[ -z "$_remote" ]]; then
+        warn "could not reach the remote to check if this checkout is current"
+    elif [[ "$_local" != "$_remote" ]]; then
+        warn "this checkout differs from origin/${_branch}."
+        warn "  local  ${_local:0:8}"
+        warn "  remote ${_remote:0:8}"
+        warn "  The steps printed at the end come from THIS checkout, so some may"
+        warn "  be out of date. Ask whoever owns ${REPO_ROOT} to run:"
+        warn "    git -C ${REPO_ROOT} pull && chmod -R a+rX ${REPO_ROOT}"
+    else
+        ok "checkout matches origin/${_branch} (${_local:0:8})"
+    fi
+else
+    warn "${REPO_ROOT} is not a git checkout; cannot check freshness"
+fi
+
 # ------------------------------------------------------- shared image store --
 echo
 echo "=== container image store ==="
@@ -291,10 +325,14 @@ fi
 
 # ------------------------------------------------------------- what's left --
 echo
-echo "${GRN}Mechanical setup done.${RST} Nothing was authenticated — those steps are yours:"
+echo "${GRN}Step 1 done.${RST}  (\"Per-user setup\" in the README — this script is step 1.)"
+echo
+echo "Nothing was authenticated. Steps 2-6 below are yours, and the numbering"
+echo "matches the README exactly, so you can follow either one."
+
 cat <<EOF
 
-  1. Google Cloud. Needed because fiss-mcp reads YOUR credentials from
+  Step 2. Google Cloud. Needed because fiss-mcp reads YOUR credentials from
      ~/.config/gcloud. Logging into this VM over SSH used your SSH key, not your
      Google identity, so this is a separate step:
 
@@ -319,7 +357,7 @@ cat <<EOF
      fail with "Project was not passed and could not be determined from the
      environment". Measured, not assumed.
 
-  2. GitHub, if you want to push from this host:
+  Step 3. GitHub, if you want to push from this host:
 
        command -v gh || sudo apt-get install -y gh
        gh auth login --web
@@ -352,17 +390,17 @@ cat <<EOF
      git credentials by design, so \`git push\` from inside it cannot succeed.
      Commit inside, push outside. That is deliberate, not a limitation.
 
-  3. Build the fiss-mcp venv (installs nothing system-wide):
+  Step 4. Build the fiss-mcp venv (installs nothing system-wide):
 
        source ${ENV_FILE}
        ./setup_host.sh
 
-  4. Launch, and run /login once inside for Claude Code:
+  Step 5. Launch, and run /login once inside for Claude Code:
 
        ./run_claude_docker.sh
 
 
-  5. Give the agent something to work on. Straight after step 4 it can see only
+  Step 6. Give the agent something to work on. Straight after step 5 it can see only
      an empty /workspace. Clone whatever you want worked on into your workspace:
 
        cd ${USER_ROOT}/workspace

@@ -439,7 +439,11 @@ image store is shared read-only (below) they cannot.
 ### Per-user setup (every user does this once)
 
 Six steps. 1, 4, 5 and 6 are one or two commands each; 2 and 3 are the
-interactive logins only you can do. Following these in order should require no
+interactive logins only you can do.
+
+Step 1 reprints steps 2-6 when it finishes, using **the same numbering as this
+document**, so you can follow either the script output or the README without
+having to reconcile them. Following these in order should require no
 fixes afterwards — if it does, that is a bug in this document.
 
 Everything of yours lives under one directory, `/mnt/sandbox/users/$USER/`:
