@@ -170,23 +170,27 @@ fi
 # --------------------------------------------------------------- env file ---
 echo
 echo "=== env file ==="
-ENV_FILE="${REPO_ROOT}/env.${USER}.sh"
+# One location, always: the user's own tree. It is always writable, it is on the
+# data disk so it survives a boot-disk rebuild, and it keeps per-user files out of
+# a shared checkout. An earlier version put it in the checkout when that happened
+# to be writable, so two users on one host could have it in different places.
+ENV_FILE="${USER_ROOT}/env.${USER}.sh"
 if [[ -e "$ENV_FILE" ]]; then
-    ok "$(basename "$ENV_FILE") already exists (left alone)"
-elif [[ -w "$REPO_ROOT" ]]; then
-    sed -e "s|__USER_ROOT__|${USER_ROOT}|g" \
-        -e "s|__REPO_ROOT__|${REPO_ROOT}|g" \
-        -e "s|__USER__|${USER}|g" \
-        "${REPO_ROOT}/env.gcp.example.sh" > "$ENV_FILE"
-    ok "wrote $(basename "$ENV_FILE")"
+    ok "env file already exists, left alone: ${ENV_FILE}"
 else
-    # Shared read-only checkout: keep the user's env file in their own tree.
-    ENV_FILE="${USER_ROOT}/env.${USER}.sh"
     sed -e "s|__USER_ROOT__|${USER_ROOT}|g" \
         -e "s|__REPO_ROOT__|${REPO_ROOT}|g" \
         -e "s|__USER__|${USER}|g" \
         "${REPO_ROOT}/env.gcp.example.sh" > "$ENV_FILE"
-    ok "checkout is read-only; wrote ${ENV_FILE}"
+    ok "wrote ${ENV_FILE}"
+fi
+
+# Migrate a stray copy left in the checkout by an older version, so a user does
+# not end up sourcing a stale file that no longer matches the template.
+LEGACY_ENV="${REPO_ROOT}/env.${USER}.sh"
+if [[ -e "$LEGACY_ENV" ]]; then
+    warn "an older env file exists in the checkout: ${LEGACY_ENV}"
+    warn "  the current one is ${ENV_FILE} -- delete the old one to avoid confusion"
 fi
 
 # ------------------------------------------------------- shared image store --
@@ -359,17 +363,20 @@ cat <<EOF
 
 
   5. Give the agent something to work on. Straight after step 4 it can see only
-     an empty /workspace. Clone the repos you want worked on and mount them:
+     an empty /workspace. Clone whatever you want worked on into your workspace:
 
-       mkdir -p ${USER_ROOT}/repos && cd ${USER_ROOT}/repos
+       cd ${USER_ROOT}/workspace
        git clone https://github.com/your-org/your-repo
 
-     then in ${ENV_FILE} replace the commented line with:
+     That is all. workspace/ is already mounted as /workspace, so the repo shows
+     up inside at /workspace/your-repo with no further configuration, read-write,
+     and files the agent writes stay owned by you on the host.
 
-       export CLAUDE_SANDBOX_RW_MOUNTS="${USER_ROOT}/repos/your-repo"
+     You push from the host side, at ${USER_ROOT}/workspace/your-repo. The agent
+     cannot: the container holds no git credentials.
 
-     They appear inside at /projects/<basename>, read-write, owned by you on the
-     host. Do NOT clone into ${USER_ROOT}/workspace AND also list it in
-     CLAUDE_SANDBOX_RW_MOUNTS -- workspace is already mounted as /workspace, so
-     the repo would appear twice under two different paths.
+     (CLAUDE_SANDBOX_RW_MOUNTS exists for repos that must live somewhere OTHER
+     than your workspace, mounting them at /projects/<name>. You do not need it
+     for the normal case, and you should not point it at workspace/ -- that would
+     mount the same repo twice, under two different paths.)
 EOF

@@ -438,10 +438,13 @@ image store is shared read-only (below) they cannot.
 
 ### Per-user setup (every user does this once)
 
-Six steps. Steps 1, 4 and 5 are one command each; 2 and 3 are the interactive
-logins only you can do; step 6 is what actually gives the agent something to work
-on. Following these in order should require no fixes afterwards — if it does,
-that is a bug in this document.
+Six steps. 1, 4, 5 and 6 are one or two commands each; 2 and 3 are the
+interactive logins only you can do. Following these in order should require no
+fixes afterwards — if it does, that is a bug in this document.
+
+Everything of yours lives under one directory, `/mnt/sandbox/users/$USER/`:
+your env file, your workspace, your state, your Claude token, your fiss-mcp venv.
+Nothing per-user goes in the shared checkout.
 
 **Important:** logging in to this VM does **not** authenticate you to Google
 Cloud. SSH used your *SSH key* from project metadata, which has nothing to do
@@ -581,9 +584,13 @@ decides what leaves the machine.
 pinned Python 3.12 into your directory.
 
 ```bash
-source env.$USER.sh
+cd /mnt/sandbox/repo
+source /mnt/sandbox/users/$USER/env.$USER.sh
 ./setup_host.sh
 ```
+
+Your env file is always at **`/mnt/sandbox/users/$USER/env.$USER.sh`** — in your own
+tree on the data disk, never in the shared checkout.
 
 **5. Launch.** On the very first run, type `/login` inside to authenticate Claude
 Code. The token is stored in your own state dir; the host's `~/.claude` is never
@@ -591,67 +598,144 @@ mounted.
 
 ```bash
 cd /mnt/sandbox/repo
-source env.$USER.sh
+source /mnt/sandbox/users/$USER/env.$USER.sh
 ./run_claude_docker.sh
 ```
 
 Later sessions resume with `./run_claude_docker.sh --resume <session-id>`.
 
-**6. Give the agent something to work on.** After step 5 the agent can see only
-an empty `/workspace`, which is usually not what you want. Clone the repos you
-intend to work on and mount them:
+**6. Give the agent something to work on.** After step 5 it can see only an
+empty `/workspace`. Clone whatever you want worked on into your workspace:
 
 ```bash
-mkdir -p /mnt/sandbox/users/$USER/repos
-cd /mnt/sandbox/users/$USER/repos
+cd /mnt/sandbox/users/$USER/workspace
 git clone https://github.com/your-org/your-repo
-
-# then in /mnt/sandbox/repo/env.$USER.sh, replace the commented line:
-export CLAUDE_SANDBOX_RW_MOUNTS="/mnt/sandbox/users/$USER/repos/your-repo"
 ```
 
-They appear inside as `/projects/<basename>`, read-write, with files owned by you
-on the host.
+That is the whole step. `workspace/` is already bind-mounted as `/workspace`, so
+the repo appears inside at `/workspace/your-repo` with **no mount configuration**,
+read-write, and files the agent writes stay owned by you on the host.
 
-**Do not clone into `workspace/` and also list it in `CLAUDE_SANDBOX_RW_MOUNTS`.**
-`workspace/` is already mounted as `/workspace`, so the repo would appear twice —
-once at `/workspace/your-repo` and once at `/projects/your-repo` — two views of
-one git repo in a single container, which is a reliable way to confuse both you
-and the agent. Pick one: leave it under `workspace/` and reach it at
-`/workspace/<name>`, or keep it in `repos/` and mount it at `/projects/<name>`.
+You push from the host side, at
+`/mnt/sandbox/users/$USER/workspace/your-repo` — see
+[the push workflow](#read-write-project-mounts-and-how-pushing-works). The agent
+cannot: the container carries no git credentials.
 
-See [the push workflow section](#read-write-project-mounts-and-how-pushing-works)
-for the review-then-push loop.
+`CLAUDE_SANDBOX_RW_MOUNTS` exists for repos that must live somewhere *other* than
+your workspace, surfacing them at `/projects/<name>`. You do not need it for the
+normal case, and do not point it at `workspace/` — that mounts the same repo
+twice under two different paths.
 Session IDs are per-sandbox and are not visible to the host's `claude`.
 
 #### What each user gets
 
 ```
 /mnt/sandbox/users/<user>/          chmod 700 — other users cannot read it
-├── workspace/                      -> /workspace  (rw) — provision this yourself
+├── env.<user>.sh                   your config; the only place it lives
+├── workspace/                      -> /workspace (rw); clone your repos in here
+│   └── your-repo/                     appears inside at /workspace/your-repo
 ├── state/                          per-instance hot state, .claude.json
 ├── shared/.claude/                 settings, hooks, plugins, YOUR Claude token
 └── fiss-mcp/{venv,fiss-mcp}/       your own uv venv and pinned clone
 ```
 
-Nothing of one user's is reachable by another, and none of it is in `$HOME` —
-home directories are on the small boot disk, and the 8.33 GB image plus
-workspaces do not fit there.
+One directory holds everything of yours, and nothing per-user goes in the shared
+checkout. Repos live in `workspace/`, which is already mounted, so no mount
+configuration is involved in the normal case.
 
-#### Adding a user
+None of it is in `$HOME`: home directories are on the small boot disk, while the
+data disk is both large enough and survives a VM rebuild.
 
-Append their public key to the project metadata; the Google guest agent creates
-the account with `useradd`, which is what allocates the `/etc/subuid` ranges
-rootless podman needs:
+Other users cannot read it directly — but `chmod 700` does **not** stop `sudo`.
+Every metadata-SSH-key user on a GCE VM lands in `google-sudoers`, so anyone who
+can log in can read another user's Claude token and gcloud credentials. Treat
+co-users as trusted, or control who has a key.
+
+#### Adding a user (admin, before their steps 1-6)
+
+Two routes. Both end with a real local Unix account, which matters because
+`useradd` is what allocates the `/etc/subuid` and `/etc/subgid` ranges rootless
+podman cannot work without.
+
+**Route A — a real person.** Append their public key to project metadata; the
+Google guest agent creates the account on their first login:
 
 ```bash
-gcloud compute project-info describe \
-  --format="value(commonInstanceMetadata.items.filter(\"key:ssh-keys\").extract(\"value\"))" > keys.txt
-printf '%s\n' "newuser:ssh-rsa AAAA... newuser@laptop" >> keys.txt
+# 1. read the existing keys out. Use jq on the JSON: gcloud's value() formatter
+#    renders the field as a Python-style list, e.g. ['user:ssh-rsa AAAA...'],
+#    and writing THAT back would corrupt the metadata for everyone.
+gcloud compute project-info describe --format=json \
+  | jq -r '.commonInstanceMetadata.items[] | select(.key=="ssh-keys") | .value' \
+  > keys.txt
+
+# 2. sanity-check before you touch anything: one "user:ssh-..." per line,
+#    no brackets or quotes, and every existing user still present.
+cat keys.txt
+
+# 3. append theirs
+printf '%s\n' "newuser:ssh-ed25519 AAAA... newuser@laptop" >> keys.txt
+
+# 4. write the whole set back
 gcloud compute project-info add-metadata --metadata-from-file ssh-keys=keys.txt
 ```
 
-They then run the five steps above. No admin action beyond the key.
+Check step 2 properly. `add-metadata` replaces the entire `ssh-keys` value, so a
+malformed file removes everyone else's access — on a host where you may only have
+root.
+
+`add-metadata` **replaces** the whole `ssh-keys` value, so read the existing keys
+first and append — do not pass a single key. Note also that `gcloud compute ssh`
+maintains its own short-lived, expiring entries at the *instance* level; leave
+those alone.
+
+That is the only admin action needed. They then run steps 1-6 themselves.
+
+**Route B — a local test account**, no Google identity and no metadata change:
+
+```bash
+sudo useradd -m -s /bin/bash rcox3
+grep '^rcox3:' /etc/subuid /etc/subgid    # must print a range; useradd allocates it
+sudo loginctl enable-linger rcox3         # so /run/user/<uid> exists
+```
+
+The account has **no password and no sudo**, which is what you want for a test:
+if the sandbox works for it, it works for a genuinely least-privilege user.
+
+To become that user you need a real systemd session, not just `sudo -u`. Without
+`XDG_RUNTIME_DIR` podman fails with confusing runtime-directory errors:
+
+```bash
+sudo apt-get install -y systemd-container    # once, if machinectl is missing
+sudo machinectl shell rcox3@
+```
+
+Or, without `systemd-container`:
+
+```bash
+sudo -u rcox3 env XDG_RUNTIME_DIR=/run/user/$(id -u rcox3) bash -l
+cd ~     # required: you inherit the previous user's cwd, which rcox3 cannot read
+```
+
+That `cd ~` is not optional. podman has to `chdir` to the working directory, and
+if you are left standing in another user's home it fails with
+`cannot chdir to /home/<other>: Permission denied` before doing anything else.
+
+Then run steps 1-6 as that user. Verify the isolation actually holds while you are
+there:
+
+```bash
+podman images                      # localhost/claude-sandbox, R/O = true
+du -sh ~/.local/share/containers   # small: no private copy of the 8.3 GB image
+```
+
+**Removing a test account:**
+
+```bash
+sudo loginctl disable-linger rcox3
+sudo userdel -r rcox3
+sudo rm -rf /mnt/sandbox/users/rcox3
+sudo sed -i '/^rcox3:/d' /etc/subuid /etc/subgid   # userdel leaves these behind
+```
 
 ### Rebuilding for more cores
 
@@ -1072,16 +1156,25 @@ Names are picked by basename, with parent segments prepended on collision (so
 Host paths must already exist; the launcher refuses to start otherwise rather than
 letting the engine create an empty directory.
 
-On a shared VM, clone into the **data disk**, not `$HOME` — home directories live
-on the small boot disk:
+**You usually do not need this.** Your workspace directory is already bind-mounted
+as `/workspace`, so cloning a repo there makes it visible inside with no mount
+configuration at all:
 
 ```bash
-mkdir -p /mnt/sandbox/users/$USER/repos
-cd /mnt/sandbox/users/$USER/repos
+cd /mnt/sandbox/users/$USER/workspace     # already mounted as /workspace
 git clone https://github.com/your-org/your-repo
-# then in env.<USER>.sh:
-#   export CLAUDE_SANDBOX_RW_MOUNTS="/mnt/sandbox/users/$USER/repos/your-repo"
+# visible inside at /workspace/your-repo — nothing else to do
 ```
+
+Reach for `CLAUDE_SANDBOX_RW_MOUNTS` only when a repo must live somewhere *else*:
+a checkout shared between users, or one already sitting outside your workspace.
+Never point it at your own `workspace/` — that mounts the same repo twice, once at
+`/workspace/<name>` and once at `/projects/<name>`, which is a reliable way to
+confuse both you and the agent.
+
+On a shared VM, clone onto the **data disk** rather than `$HOME` in either case:
+home directories live on the small boot disk, and the data disk is what survives a
+rebuild.
 
 Files the agent writes come out owned by **you** on the host, because the
 container runs with `--userns=keep-id:uid=1015`. No `sudo`, no ownership repair —
