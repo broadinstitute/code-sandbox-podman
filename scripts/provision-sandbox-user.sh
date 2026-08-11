@@ -319,12 +319,30 @@ cat <<EOF
 
        command -v gh || sudo apt-get install -y gh
        gh auth login --web
-
-     Prints a one-time code; open the URL on your laptop. This also configures
-     git's credential helper, so HTTPS pushes work afterwards.
+       gh auth setup-git
+       git config --get-all credential.helper   # must print the gh helper
 
      Paste the code into the BROWSER, not into a chat or a terminal log — it is
      single-use credential material.
+
+     'gh auth setup-git' is a SEPARATE REQUIRED STEP. Logging in gives gh a
+     token; it does not necessarily configure git to use it. Without it, git
+     push asks for a username and password, and GitHub removed password auth,
+     so it can never succeed. Check the credential.helper line above rather
+     than finding out at push time.
+
+     If a branch touches .github/workflows/, the push is rejected even with a
+     working login: "refusing to allow an OAuth App to create or update
+     workflow ... without workflow scope". Grant it with:
+
+       gh auth refresh -s workflow
+
+     Worth a look before you do. A modified workflow runs with your Actions
+     permissions and secrets, and it is the one thing the credential boundary
+     does not cover: the agent cannot reach GitHub, but it can author a
+     workflow change that you then push.
+
+       git diff origin/HEAD...HEAD -- .github/workflows/
 
      Note: this authenticates YOU on the host. The sandbox container carries no
      git credentials by design, so \`git push\` from inside it cannot succeed.
@@ -339,4 +357,19 @@ cat <<EOF
 
        ./run_claude_docker.sh
 
+
+  5. Give the agent something to work on. Straight after step 4 it can see only
+     an empty /workspace. Clone the repos you want worked on and mount them:
+
+       mkdir -p ${USER_ROOT}/repos && cd ${USER_ROOT}/repos
+       git clone https://github.com/your-org/your-repo
+
+     then in ${ENV_FILE} replace the commented line with:
+
+       export CLAUDE_SANDBOX_RW_MOUNTS="${USER_ROOT}/repos/your-repo"
+
+     They appear inside at /projects/<basename>, read-write, owned by you on the
+     host. Do NOT clone into ${USER_ROOT}/workspace AND also list it in
+     CLAUDE_SANDBOX_RW_MOUNTS -- workspace is already mounted as /workspace, so
+     the repo would appear twice under two different paths.
 EOF

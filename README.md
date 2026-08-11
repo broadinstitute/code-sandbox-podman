@@ -421,8 +421,16 @@ builds at all. `host_fiss_mcp/install.sh` fails with instructions if uv is absen
 Finally, put the checkout somewhere every user can read:
 
 ```bash
-sudo git clone https://github.com/broadinstitute/code-sandbox-podman /opt/code-sandbox-podman
-cd /opt/code-sandbox-podman/docker && sudo make && cd ..
+# On the DATA disk, not /opt: the rebuild path relies on the checkout surviving
+# a boot-disk replacement. Owned by you rather than root, so `git pull` later uses
+# your own GitHub credentials and root never needs any.
+sudo mkdir -p /mnt/sandbox/repo
+sudo chown "$USER:$USER" /mnt/sandbox/repo
+git clone https://github.com/broadinstitute/code-sandbox-podman /mnt/sandbox/repo
+chmod -R a+rX /mnt/sandbox/repo
+
+cd /mnt/sandbox/repo
+sudo ./scripts/build-shared-image.sh
 ```
 
 The image is built once by an admin. Users do not need to build it, and if the
@@ -430,8 +438,10 @@ image store is shared read-only (below) they cannot.
 
 ### Per-user setup (every user does this once)
 
-Five steps. Steps 1 and 5 are one command each; 2 and 3 are the interactive
-logins only you can do.
+Six steps. Steps 1, 4 and 5 are one command each; 2 and 3 are the interactive
+logins only you can do; step 6 is what actually gives the agent something to work
+on. Following these in order should require no fixes afterwards — if it does,
+that is a bug in this document.
 
 **Important:** logging in to this VM does **not** authenticate you to Google
 Cloud. SSH used your *SSH key* from project metadata, which has nothing to do
@@ -447,7 +457,7 @@ gcloud compute ssh "$VM" --zone "$ZONE"
 settings, writes your `env.<USER>.sh`, and enables linger. Authenticates nothing.
 
 ```bash
-cd /opt/code-sandbox-podman        # wherever the shared checkout lives
+cd /mnt/sandbox/repo        # wherever the admin put the shared checkout
 ./scripts/provision-sandbox-user.sh
 ```
 
@@ -502,13 +512,12 @@ different identity with narrow scopes, and it is not what has access to your
 Terra workspaces — fiss-mcp needs *your* credentials, read from your own
 `~/.config/gcloud`.
 
-Then set your project in `env.<USER>.sh`:
+`CLAUDE_SANDBOX_GCP_PROJECT` is already set in your rendered `env.<USER>.sh`
+(defaulted to `warp-pipeline-dev`), so there is nothing to do here unless you are
+deploying elsewhere — in which case change it to a project where you hold
+`serviceusage.services.use`.
 
-```bash
-export CLAUDE_SANDBOX_GCP_PROJECT=warp-pipeline-dev   # substitute your own
-```
-
-Do this **even though** gcloud finishes by reporting
+It has to be set **even though** gcloud finishes by reporting
 `Quota project "..." was added to ADC`. That sets `quota_project_id`, which is
 not a project source: `google.auth.default()` still returns `project=None`, and
 fiss-mcp's four GCS tools fail with `Project was not passed and could not be
@@ -521,11 +530,46 @@ determined from the environment`. The same applies to
 ```bash
 command -v gh || sudo apt-get install -y gh    # not on a minimal Debian image
 gh auth login --web
+gh auth setup-git                              # REQUIRED, see below
+git config --get-all credential.helper         # must print: !/usr/bin/gh auth git-credential
 ```
 
-Prints a one-time code; open the URL on your laptop. This also configures git's
-credential helper, so HTTPS pushes work afterwards. An SSH key is the
-alternative, but `--web` avoids generating and registering one.
+`gh auth login` prints a one-time code to complete in a browser on your own
+machine. **`gh auth setup-git` is a separate, required step.** Logging in gives
+*gh* a token; it does not necessarily configure *git* to use it. The interactive
+flow offers to, but it is easy to miss and `--web` may not prompt at all. Without
+it, `git push` falls back to asking for a username and password — and GitHub
+removed password auth, so it can never succeed. Verify with the
+`credential.helper` line above rather than finding out at push time.
+
+**If your branch touches `.github/workflows/`,** the push is rejected even with a
+working login:
+
+```
+refusing to allow an OAuth App to create or update workflow
+`.github/workflows/foo.yml` without `workflow` scope
+```
+
+The login worked — GitHub is blocking OAuth apps from modifying CI definitions.
+Grant the scope, which is another browser round-trip and no re-login:
+
+```bash
+gh auth refresh -s workflow
+```
+
+Treat that rejection as a prompt to look, not just a step to clear. A modified
+workflow runs with your Actions permissions and secrets, and it is exactly the
+category the credential boundary does *not* cover: the agent cannot reach GitHub,
+but it can author a workflow change that you then push. Check what you are about
+to grant:
+
+```bash
+git diff origin/HEAD...HEAD -- .github/workflows/
+```
+
+SSH keys are the alternative and sidestep the scope system entirely, since a key
+is not an OAuth app — see
+[the push workflow section](#read-write-project-mounts-and-how-pushing-works).
 
 This authenticates **you on the host**. The container deliberately carries no
 git credentials — no ssh keys, no `~/.git-credentials`, no `gh`, no tokens — so
@@ -546,10 +590,38 @@ Code. The token is stored in your own state dir; the host's `~/.claude` is never
 mounted.
 
 ```bash
+cd /mnt/sandbox/repo
+source env.$USER.sh
 ./run_claude_docker.sh
 ```
 
 Later sessions resume with `./run_claude_docker.sh --resume <session-id>`.
+
+**6. Give the agent something to work on.** After step 5 the agent can see only
+an empty `/workspace`, which is usually not what you want. Clone the repos you
+intend to work on and mount them:
+
+```bash
+mkdir -p /mnt/sandbox/users/$USER/repos
+cd /mnt/sandbox/users/$USER/repos
+git clone https://github.com/your-org/your-repo
+
+# then in /mnt/sandbox/repo/env.$USER.sh, replace the commented line:
+export CLAUDE_SANDBOX_RW_MOUNTS="/mnt/sandbox/users/$USER/repos/your-repo"
+```
+
+They appear inside as `/projects/<basename>`, read-write, with files owned by you
+on the host.
+
+**Do not clone into `workspace/` and also list it in `CLAUDE_SANDBOX_RW_MOUNTS`.**
+`workspace/` is already mounted as `/workspace`, so the repo would appear twice —
+once at `/workspace/your-repo` and once at `/projects/your-repo` — two views of
+one git repo in a single container, which is a reliable way to confuse both you
+and the agent. Pick one: leave it under `workspace/` and reach it at
+`/workspace/<name>`, or keep it in `repos/` and mount it at `/projects/<name>`.
+
+See [the push workflow section](#read-write-project-mounts-and-how-pushing-works)
+for the review-then-push loop.
 Session IDs are per-sandbox and are not visible to the host's `claude`.
 
 #### What each user gets
