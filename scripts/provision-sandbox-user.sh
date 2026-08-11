@@ -325,96 +325,30 @@ fi
 
 # ------------------------------------------------------------- what's left --
 echo
-echo "${GRN}Step 1 done.${RST}  (\"Per-user setup\" in the README — this script is step 1.)"
+echo "${GRN}Step 1 done.${RST}  This script is step 1 of \"Per-user setup\" in the README."
 echo
-echo "Nothing was authenticated. Steps 2-6 below are yours, and the numbering"
-echo "matches the README exactly, so you can follow either one."
-
+echo "Nothing was authenticated. Steps 2-6 are yours, and the README has the"
+echo "details and the reasons — this script does not repeat them, so the two"
+echo "cannot drift apart."
 cat <<EOF
 
-  Step 2. Google Cloud. Needed because fiss-mcp reads YOUR credentials from
-     ~/.config/gcloud. Logging into this VM over SSH used your SSH key, not your
-     Google identity, so this is a separate step:
+Your paths, which the README cannot know:
 
-       gcloud auth login --no-launch-browser
-       gcloud auth application-default login --no-launch-browser
+  env file    ${ENV_FILE}
+  workspace   ${USER_ROOT}/workspace     (mounted inside as /workspace)
+  state       ${USER_ROOT}/state
+  repo        ${REPO_ROOT}
 
-     Both print a URL. Open it on your laptop, paste the code back.
+What is left, per the README:
 
-     On a GCE VM the second command warns that it is "not necessary" because the
-     VM's service credentials would be used automatically, and asks to confirm.
-     Answer Y. The VM's service account is not you: it is a different identity
-     with narrow scopes, and it is not what has access to your Terra workspaces.
-     fiss-mcp needs YOUR credentials.
+  Step 2  Google Cloud     gcloud auth login + application-default login
+                           (both --no-launch-browser; answer Y to the
+                           "not necessary" prompt on a GCE VM)
+  Step 3  GitHub           gh auth login --web, THEN gh auth setup-git
+  Step 4  fiss-mcp venv    cd ${REPO_ROOT} && source ${ENV_FILE} && ./setup_host.sh
+  Step 5  Launch           ./run_claude_docker.sh   (then /login once, inside)
+  Step 6  Add a repo       cd ${USER_ROOT}/workspace && git clone <url>
 
-     Then set CLAUDE_SANDBOX_GCP_PROJECT in
-     ${ENV_FILE}
-     to a project where you have serviceusage.services.use.
-
-     Do this even though gcloud reports 'Quota project "..." was added to ADC'.
-     That sets quota_project_id, which is NOT a project source:
-     google.auth.default() still returns project=None, and the fiss-mcp GCS tools
-     fail with "Project was not passed and could not be determined from the
-     environment". Measured, not assumed.
-
-  Step 3. GitHub, if you want to push from this host:
-
-       command -v gh || sudo apt-get install -y gh
-       gh auth login --web
-       gh auth setup-git
-       git config --get-all credential.helper   # must print the gh helper
-
-     Paste the code into the BROWSER, not into a chat or a terminal log — it is
-     single-use credential material.
-
-     'gh auth setup-git' is a SEPARATE REQUIRED STEP. Logging in gives gh a
-     token; it does not necessarily configure git to use it. Without it, git
-     push asks for a username and password, and GitHub removed password auth,
-     so it can never succeed. Check the credential.helper line above rather
-     than finding out at push time.
-
-     If a branch touches .github/workflows/, the push is rejected even with a
-     working login: "refusing to allow an OAuth App to create or update
-     workflow ... without workflow scope". Grant it with:
-
-       gh auth refresh -s workflow
-
-     Worth a look before you do. A modified workflow runs with your Actions
-     permissions and secrets, and it is the one thing the credential boundary
-     does not cover: the agent cannot reach GitHub, but it can author a
-     workflow change that you then push.
-
-       git diff origin/HEAD...HEAD -- .github/workflows/
-
-     Note: this authenticates YOU on the host. The sandbox container carries no
-     git credentials by design, so \`git push\` from inside it cannot succeed.
-     Commit inside, push outside. That is deliberate, not a limitation.
-
-  Step 4. Build the fiss-mcp venv (installs nothing system-wide):
-
-       source ${ENV_FILE}
-       ./setup_host.sh
-
-  Step 5. Launch, and run /login once inside for Claude Code:
-
-       ./run_claude_docker.sh
-
-
-  Step 6. Give the agent something to work on. Straight after step 5 it can see only
-     an empty /workspace. Clone whatever you want worked on into your workspace:
-
-       cd ${USER_ROOT}/workspace
-       git clone https://github.com/your-org/your-repo
-
-     That is all. workspace/ is already mounted as /workspace, so the repo shows
-     up inside at /workspace/your-repo with no further configuration, read-write,
-     and files the agent writes stay owned by you on the host.
-
-     You push from the host side, at ${USER_ROOT}/workspace/your-repo. The agent
-     cannot: the container holds no git credentials.
-
-     (CLAUDE_SANDBOX_RW_MOUNTS exists for repos that must live somewhere OTHER
-     than your workspace, mounting them at /projects/<name>. You do not need it
-     for the normal case, and you should not point it at workspace/ -- that would
-     mount the same repo twice, under two different paths.)
+Read the README before running steps 2 and 3. Both have non-obvious failure
+modes that cost real time if you skip the explanation.
 EOF

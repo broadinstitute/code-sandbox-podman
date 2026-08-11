@@ -207,11 +207,14 @@ ${GRN}setup_host_podman.sh: host is ready.${RST}
 
 Nothing was installed and no system state was changed.
 
-Next:
-  1. cd docker && make ENGINE=${ENGINE} && cd ..     # build the image
-  2. source env.<INSTANCE>.sh && ./run_claude_docker.sh
-  3. run /login inside the container once — the token is stored in the
-     sandbox state dir, not in your host ~/.claude.
+This is step 4 of "Per-user setup" in the README. Continue there with step 5.
+
+The README is the single source of truth for the ordering; this script does not
+repeat it, so the two cannot drift apart.
+
+Note: you do NOT build the container image. An admin builds it once into a shared
+read-only store (scripts/build-shared-image.sh), so every user provably runs the
+same image, and `make` is deliberately absent from the host.
 
 No log-out/log-in is needed: rootless podman uses no docker group.
 EOF
