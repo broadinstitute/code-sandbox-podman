@@ -68,7 +68,7 @@ source env.main.sh
 # 2. Check the host and build the host-side fiss-mcp venv. Installs nothing.
 ./setup_host.sh
 
-# 3. Build the image. Takes ~36 minutes and ~8.3 GB the first time.
+# 3. Build the image. Takes ~36 minutes and ~8.4 GB the first time.
 cd docker && make && cd ..
 
 # 4. Launch.
@@ -324,7 +324,7 @@ Details and toggles: [COMPONENTS.md](COMPONENTS.md).
 
 | Document | What is in it |
 |---|---|
-| [CONFIG.md](CONFIG.md) | Every environment variable, mount layouts, read-only/read-write mounts, the push workflow, persistence |
+| [CONFIG.md](CONFIG.md) | Every environment variable, mount layouts, read-only/read-write mounts, the push workflow, installing packages, persistence |
 | [COMPONENTS.md](COMPONENTS.md) | What is in the image, fiss-mcp, CodeGraph, Headroom, Vertex mode |
 | [SERVER.md](SERVER.md) | Admin guide for the shared VM: disk, instance, users, image store, capacity, rebuilds |
 | [FAQ.md](FAQ.md) | Every error we hit, with the diagnosis that turned out to be right |

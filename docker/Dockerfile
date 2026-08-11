@@ -95,10 +95,22 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /usr/local/bin/
 # one Python version across host and container is one less thing to reason about.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python \
     CLAUDE_VENV_PYTHON=3.12
+# anndata is baked; scanpy, scvi-tools and the rest are not. The dividing line is
+# whether the dependency closure is cheap and shared:
+#
+#   anndata      ~15 MB with h5py, needed to open a .h5ad at all, and every
+#                single-cell task starts by doing that. Baking it means an agent can
+#                inspect data in its first turn instead of installing first.
+#   scvi-tools   109 packages, pulling torch plus the whole nvidia-cu13 CUDA stack
+#                (measured with `uv pip install --dry-run`) -- several GB, and only
+#                some projects want it, at versions that should be pinned per project.
+#
+# So: cheap and universal goes in the image, heavy and project-specific goes in a
+# per-project venv under /workspace. See "Installing packages" in CONFIG.md.
 RUN uv venv --python "${CLAUDE_VENV_PYTHON}" /opt/claude-venv && \
     uv pip install --python /opt/claude-venv/bin/python --no-cache \
       numpy pandas matplotlib scipy scikit-learn seaborn \
-      ipython jupyter requests \
+      ipython jupyter requests anndata \
       "headroom-ai[proxy]==0.24.0" && \
     chown -R claude:claude /opt/claude-venv /opt/uv-python
 
@@ -166,6 +178,24 @@ RUN rm -rf /usr/lib/python3*/ensurepip \
 
 ENV JAVA_HOME=/opt/java/openjdk \
     PATH=/opt/claude-venv/bin:/usr/local/cargo/bin:/opt/java/openjdk/bin:$PATH
+
+# ENV PATH is not enough on its own: a LOGIN shell sources /etc/profile, which
+# assigns PATH outright rather than appending to it, so `bash -l` starts with
+#     /usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+# and `python`, `cargo` and `java` all vanish. Measured:
+#     bash -c  'command -v python'  -> /opt/claude-venv/bin/python
+#     bash -lc 'command -v python'  -> not found
+# Claude Code's own Bash tool uses a non-login shell, so this is invisible in normal
+# operation and then bites anyone who ssh's in, runs `bash -l`, or writes a hook that
+# does -- with "python: command not found" in an image that plainly has python.
+#
+# /etc/profile.d is sourced by /etc/profile AFTER it clobbers PATH, so prepending
+# here is what actually survives.
+RUN printf '%s\n' \
+      '# Keep the image toolchain ahead of the distro one in login shells too.' \
+      'export PATH=/opt/claude-venv/bin:/usr/local/cargo/bin:/opt/java/openjdk/bin:$PATH' \
+      > /etc/profile.d/10-claude-toolchain.sh && \
+    chmod 644 /etc/profile.d/10-claude-toolchain.sh
 
 ################################################################################
 

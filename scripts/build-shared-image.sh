@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # build-shared-image.sh — build the sandbox image once into a shared, read-only
-# image store so N users do not each hold their own 8.3 GB copy.
+# image store so N users do not each hold their own 8.4 GB copy.
 #
 # Run as root (the store must be populated by a real uid, not by one user's
 # subuid range — see the note on ownership below):
@@ -11,7 +11,7 @@
 # own containers-storage.conf, which scripts/provision-sandbox-user.sh writes.
 #
 # Why a shared store rather than each user building or pulling:
-#   * 8.3 GB once instead of 8.3 GB x N users.
+#   * 8.4 GB once instead of 8.4 GB x N users.
 #   * Everyone provably runs the same image. Users cannot rebuild it, which is
 #     a feature here: the image is the trust boundary, and drift between users
 #     would make "it works for me" unfalsifiable.

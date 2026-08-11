@@ -12,6 +12,7 @@ before launching. Templates: `env.podman.example.sh` (local),
 - [Mount layout](#mount-layout)
 - [Read-only reference mounts](#read-only-reference-mounts)
 - [Read-write project mounts, and how pushing works](#read-write-project-mounts-and-how-pushing-works)
+- [Installing packages](#installing-packages)
 - [Persistence](#persistence)
 - [Customizing the image](#customizing-the-image)
 
@@ -250,6 +251,80 @@ installed.
 - **Ephemeral**, gone when the container exits: anything written outside the
   mounts. `uv pip install`, `cargo install`, `sudo apt install`, `/tmp`. To keep
   them, bake them into the image or mount the relevant directory.
+
+## Installing packages
+
+Anything written outside a mount is gone when the container exits, which decides
+where a package should go. Three options, in the order you should reach for them.
+
+### What is already there
+
+`/opt/claude-venv` is on `PATH` as `python`, with `numpy`, `pandas`, `scipy`,
+`scikit-learn`, `matplotlib`, `seaborn`, `ipython`, `jupyter`, `requests` and
+**`anndata`** (plus `h5py`, which comes with it). So an agent can open an `.h5ad`
+in its first turn without installing anything.
+
+There is **no pip**, on the host or in the container — all Python is uv-managed.
+
+### 1. A per-project venv under `/workspace` — the durable option
+
+This is the one to use for real work. `/workspace` is a bind mount, so the venv
+survives container exit and is visible to you on the host:
+
+```bash
+cd /workspace/your-project
+export UV_CACHE_DIR=/workspace/.uv-cache   # so re-installs do not re-download
+uv venv .venv
+uv pip install scvi-tools                  # or -r requirements.txt / -e .
+.venv/bin/python -c 'import scvi'
+```
+
+Verified: an `anndata` install this way came back intact in a fresh container, and
+the venv lands owned by you on the host (293 MB for anndata alone, plus an 8 MB
+cache). Add `.venv/` and `.uv-cache/` to the project's `.gitignore`.
+
+`uv` picks up `.venv` in the current directory automatically, which is why
+`uv pip install` needs no `--python` here.
+
+### 2. Into the image venv — fine for a throwaway, lost on exit
+
+```bash
+uv pip install --python /opt/claude-venv/bin/python anndata
+```
+
+This works even on a shared image store, because `/opt/claude-venv` is made
+world-writable at build time. But the container filesystem is ephemeral: verified
+gone from the next `podman run`. Use it to try something, not to set up a project.
+
+A bare `uv pip install <pkg>` with no venv in the current directory does **not**
+silently pick a target — it stops:
+
+```
+error: No virtual environment found; run `uv venv` to create an environment,
+or pass `--system` to install into a non-virtual environment
+```
+
+### 3. Bake it into the image — for what everyone needs
+
+Add it to the `uv pip install` line in `docker/Dockerfile` and rebuild. The test is
+whether the dependency closure is cheap **and** shared by everyone:
+
+| | dependency closure | verdict |
+|---|---|---|
+| `anndata` | ~15 MB with `h5py` | **baked** — every single-cell task starts by opening an `.h5ad` |
+| `scvi-tools` | **109 packages**, including `torch` and the whole `nvidia-cu13` CUDA stack | not baked — several GB, wanted by some projects, and the version should be pinned per project |
+
+Those counts are measured with `uv pip install --dry-run scvi-tools`, which resolves
+without downloading — worth running before adding anything to the image.
+
+On a shared server users cannot rebuild, so a baked package needs an admin: see
+[updating the image](SERVER.md#updating-the-image-later).
+
+### What does not work
+
+`sudo apt install` fails on a shared image store — `sudo` itself cannot run there.
+See [in-container root](COMPONENTS.md#in-container-root-works-locally-not-on-a-shared-store).
+System packages on a shared host have to be baked in.
 
 ## Customizing the image
 

@@ -47,7 +47,7 @@ relabel bind mounts for.
 
 ## The data disk is mandatory
 
-The image is ~8.3 GB. A default 10 GB boot disk leaves ~6.4 GB free, so it does
+The image is ~8.4 GB. A default 10 GB boot disk leaves ~6.4 GB free, so it does
 not fit at all, and `make rebuild` transiently needs room for a second copy.
 Create the disk **independently of the instance** so it survives a VM rebuild:
 
@@ -233,7 +233,7 @@ cd /mnt/sandbox/repo
 sudo ./scripts/build-shared-image.sh
 ```
 
-One 8.3 GB copy instead of one per user, and everyone provably runs the same
+One 8.4 GB copy instead of one per user, and everyone provably runs the same
 image. Users cannot rebuild it, which is a feature: the image is the trust
 boundary, and drift between users would make "it works for me" unfalsifiable.
 
@@ -336,7 +336,7 @@ Verify the isolation holds while you are there:
 
 ```bash
 podman images                      # localhost/claude-sandbox, R/O = true
-du -sh ~/.local/share/containers   # small: no private copy of the 8.3 GB image
+du -sh ~/.local/share/containers   # small: no private copy of the 8.4 GB image
 ```
 
 ### Logging in to a sudo-less agent account
@@ -445,7 +445,7 @@ was created independently with `auto-delete=no`:
 | on the data disk — survives | on the boot disk — must be redone |
 |---|---|
 | the checkout at `/mnt/sandbox/repo` | apt packages (podman, passt, uidmap, …) |
-| the shared image store (~8.3 GB) | the system-wide `uv` binary |
+| the shared image store (~8.4 GB) | the system-wide `uv` binary |
 | every user's workspace and state | each user's `~/.config/gcloud` (re-auth) |
 | every user's Claude OAuth token | each user's `gh` auth |
 | every user's fiss-mcp venv | the `/etc/fstab` entry |

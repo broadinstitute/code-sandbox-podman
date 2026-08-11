@@ -316,7 +316,7 @@ if [[ -d "$IMAGE_STORE" ]]; then
         cat > "$STORAGE_CONF" <<CONF
 # Written by scripts/provision-sandbox-user.sh.
 #
-# The sandbox image is ~8.3 GB. additionalimagestores exposes one shared,
+# The sandbox image is ~8.4 GB. additionalimagestores exposes one shared,
 # root-populated copy read-only, so this account does not hold its own: podman
 # lists it as R/O=true, runs it without copying, and this user's own graphroot
 # stays at a couple of hundred KB.
@@ -359,7 +359,7 @@ CONF
     fi
 else
     warn "no shared image store at ${IMAGE_STORE}."
-    warn "You will need your own copy of the image (~8.3 GB), or ask an admin to"
+    warn "You will need your own copy of the image (~8.4 GB), or ask an admin to"
     warn "run: sudo ./scripts/build-shared-image.sh"
 fi
 
