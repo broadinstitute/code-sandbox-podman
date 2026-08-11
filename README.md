@@ -34,7 +34,7 @@ what.
 | Who | One person on their own machine | Several people on one Linux VM |
 | Image | You build it | An admin builds one read-only copy everyone shares |
 | State | Anywhere you like | `/mnt/sandbox/users/$USER/` on a data disk |
-| Setup | [Local quick start](#a-standalone-local) — three commands | [Per-user setup](#per-user-setup-every-user-does-this-once) — six steps, no root |
+| Setup | [Local quick start](#a-standalone-local) — three commands | [Per-user setup](#per-user-setup-every-user-does-this-once) — five steps, no root |
 | Admin work | none | [SERVER.md](SERVER.md), once |
 
 Both need the same host prerequisites:
@@ -117,10 +117,13 @@ it (podman 4.3.1); see [Choosing the OS](SERVER.md#choosing-the-os).
 
 ### Per-user setup (every user does this once)
 
-Six steps. 1, 4, 5 and 6 are one or two commands each; 2 and 3 are interactive
-logins only you can do. Step 1 reprints steps 2-6 when it finishes using the same
+Five steps. 1, 4 and 5 are one or two commands each; 2 and 3 are interactive
+logins only you can do. Step 1 reprints steps 2-5 when it finishes using the same
 numbering as this document, so you can follow either. Following these in order
 should require no fixes afterwards — if it does, that is a bug in this document.
+
+Step 1 also clones `warp` and `warp-tools` into your workspace, so step 5 opens
+onto real code rather than an empty directory.
 
 Everything of yours lives under `/mnt/sandbox/users/$USER/`: your env file,
 workspace, state, Claude token and fiss-mcp venv. Nothing per-user goes in the
@@ -153,7 +156,8 @@ this step. Running it from *inside* the VM fails with `Request had insufficient
 authentication scopes`, which is [not about your access](FAQ.md#error-request-had-insufficient-authentication-scopes).
 
 **1. Provision.** Creates your directories on the data disk, seeds your Claude
-settings, writes your `env.<USER>.sh`, and enables linger. Authenticates nothing.
+settings, clones `warp` and `warp-tools` into your workspace, writes your
+`env.<USER>.sh`, and enables linger. Authenticates nothing.
 
 ```bash
 cd /mnt/sandbox/repo        # wherever the admin put the shared checkout
@@ -164,6 +168,12 @@ cd /mnt/sandbox/repo        # wherever the admin put the shared checkout
 `~/.config/containers/storage.conf`, which is what makes the shared image store
 visible to you; without it `podman images` looks empty and `podman run` tries to
 pull from a registry.
+
+The two repos are cloned over HTTPS and both are public, so this needs no
+credentials — pushing does, which is step 3, and stays a host-side action. They are
+full clones, not `--depth 1`, because the review-then-push workflow needs real
+history. To change or skip that, set `CLAUDE_SANDBOX_SEED_REPOS` to a
+space-separated list of clone URLs, or to the empty string.
 
 **No root, and no sudo.** Everything it touches is your own home or your own
 directory on the data disk. If a host-level prerequisite is missing it stops and
@@ -226,18 +236,21 @@ source /mnt/sandbox/users/$USER/env.$USER.sh
 Later sessions: `./run_claude_docker.sh --resume <session-id>`. Session IDs are
 per-sandbox and invisible to the host's `claude`.
 
-**6. Give the agent something to work on.** After step 5 it can see only an empty
-`/workspace`.
+Inside, `/workspace` already contains `warp` and `warp-tools` from step 1, so there
+is nothing else to set up before the agent can do useful work.
+
+### Adding more repos
+
+`workspace/` is bind-mounted as `/workspace`, so a clone is all it takes — no mount
+configuration, read-write, and files the agent writes stay owned by you:
 
 ```bash
 cd /mnt/sandbox/users/$USER/workspace
 git clone https://github.com/your-org/your-repo
 ```
 
-That is the whole step — `workspace/` is already bind-mounted as `/workspace`, so
-the repo appears inside at `/workspace/your-repo` with no mount configuration,
-read-write, and files the agent writes stay owned by you. You push from the host
-side at `/mnt/sandbox/users/$USER/workspace/your-repo`; see
+You push from the host side at
+`/mnt/sandbox/users/$USER/workspace/<repo>`; see
 [how pushing works](CONFIG.md#read-write-project-mounts-and-how-pushing-works).
 
 ---

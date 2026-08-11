@@ -167,6 +167,50 @@ else
     ok "shared state already present (left alone)"
 fi
 
+# -------------------------------------------------------- workspace repos ---
+echo
+echo "=== workspace repos ==="
+# Clone the repos people are actually here to work on, so the very first launch
+# opens onto something instead of an empty /workspace. This used to be a manual
+# step AFTER the launch step, which is the wrong order: the first thing a new user
+# saw inside the sandbox was nothing to do.
+#
+# Deliberately HTTPS and deliberately here, before the GitHub step: both repos are
+# public, so cloning needs no credentials. Pushing later does, which is what
+# `gh auth login` + `gh auth setup-git` are for -- and it stays a host-side action.
+# The container never gets a credential either way.
+#
+# NOT shallow. --depth 1 would save ~180 MB per user and break the documented
+# review-then-push workflow, which needs `git log origin/HEAD..HEAD` and real
+# branch history. Measured full-clone cost is ~234 MB (warp) + ~99 MB (warp-tools);
+# against a 200 GB data disk that is the cheaper side of the trade.
+#
+# Set CLAUDE_SANDBOX_SEED_REPOS to a space-separated list of clone URLs to change
+# this, or to the empty string to skip cloning entirely.
+SEED_REPOS="${CLAUDE_SANDBOX_SEED_REPOS-https://github.com/broadinstitute/warp https://github.com/broadinstitute/warp-tools}"
+
+if [[ -z "${SEED_REPOS// /}" ]]; then
+    ok "CLAUDE_SANDBOX_SEED_REPOS is empty — skipping repo clone"
+else
+    for url in $SEED_REPOS; do
+        name="$(basename "${url%.git}")"
+        dest="${USER_ROOT}/workspace/${name}"
+        if [[ -d "$dest" ]]; then
+            ok "already present: workspace/${name} (left alone)"
+            continue
+        fi
+        echo "          cloning ${name} ..."
+        # Non-fatal: a network hiccup or a repo that has gone private must not
+        # abort provisioning, because everything above it has already succeeded and
+        # a user can clone by hand.
+        if git clone --quiet "$url" "$dest"; then
+            ok "cloned workspace/${name} ($(du -sh "$dest" | cut -f1), branch $(git -C "$dest" rev-parse --abbrev-ref HEAD))"
+        else
+            warn "could not clone ${url} — clone it by hand into ${USER_ROOT}/workspace"
+        fi
+    done
+fi
+
 # --------------------------------------------------------------- env file ---
 echo
 echo "=== env file ==="
@@ -337,7 +381,7 @@ fi
 echo
 echo "${GRN}Step 1 done.${RST}  This script is step 1 of \"Per-user setup\" in the README."
 echo
-echo "Nothing was authenticated. Steps 2-6 are yours, and the README has the"
+echo "Nothing was authenticated. Steps 2-5 are yours, and the README has the"
 echo "details and the reasons — this script does not repeat them, so the two"
 echo "cannot drift apart."
 cat <<EOF
@@ -357,7 +401,11 @@ What is left, per the README:
   Step 3  GitHub           gh auth login --web, THEN gh auth setup-git
   Step 4  fiss-mcp venv    cd ${REPO_ROOT} && source ${ENV_FILE} && ./setup_host.sh
   Step 5  Launch           ./run_claude_docker.sh   (then /login once, inside)
-  Step 6  Add a repo       cd ${USER_ROOT}/workspace && git clone <url>
+
+Your workspace is already populated, so step 5 opens onto real code. Add more
+repos any time with:
+
+  cd ${USER_ROOT}/workspace && git clone <url>
 
 Read the README before running steps 2 and 3. Both have non-obvious failure
 modes that cost real time if you skip the explanation.
