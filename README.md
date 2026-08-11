@@ -258,6 +258,10 @@ claim is verified by probe in
 - **Humans on a shared VM can read each other's directories via `sudo`.** Every
   metadata-SSH-key user on a GCE VM lands in `google-sudoers`. Accepted: co-users
   are trusted people. Agents are not, and they are what the boundary is for.
+  If you would rather your *own* agent sessions could not do that either, run them
+  from a `useradd` account, which gets no `google-sudoers` and needs no sudo to run
+  the sandbox — see
+  [running agents as a sudo-less account](SERVER.md#logging-in-to-a-sudo-less-agent-account).
 - **Review is the real control on what leaves the machine.** The agent cannot
   reach GitHub, but it can author something you then push — including CI workflow
   changes. `git diff origin/HEAD..HEAD` before pushing is the gate.

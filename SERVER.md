@@ -309,7 +309,12 @@ That is the only admin action needed. They then run
 [the six user steps](README.md#per-user-setup-every-user-does-this-once)
 themselves.
 
-**Route B — a local test account**, no Google identity, no metadata change:
+**Route B — a local account, no Google identity, no metadata change.** This is the
+**recommended way to run agents**, not just a way to test. A metadata-key account
+is placed in `google-sudoers` by the guest agent, so it can read every other
+user's Claude token and credentials. An account created with `useradd` is not, and
+cannot. Running the sandbox needs no sudo at all, so the agent account should not
+have any:
 
 ```bash
 sudo useradd -m -s /bin/bash testuser
@@ -334,14 +339,82 @@ podman images                      # localhost/claude-sandbox, R/O = true
 du -sh ~/.local/share/containers   # small: no private copy of the 8.3 GB image
 ```
 
-Removing a test account:
+### Logging in to a sudo-less agent account
+
+Give it your own public key directly, in the account's `authorized_keys` rather
+than in project metadata. Metadata is what triggers the guest agent to grant
+`google-sudoers`; a file in the home directory does not.
 
 ```bash
-sudo loginctl disable-linger testuser
-sudo userdel -r testuser
-sudo rm -rf /mnt/sandbox/users/testuser
-sudo sed -i '/^testuser:/d' /etc/subuid /etc/subgid   # userdel leaves these behind
+sudo install -d -m 700 -o agentuser -g agentuser /home/agentuser/.ssh
+sudo tee /home/agentuser/.ssh/authorized_keys < ~/.ssh/id_ed25519.pub >/dev/null
+sudo chown agentuser:agentuser /home/agentuser/.ssh/authorized_keys
+sudo chmod 600 /home/agentuser/.ssh/authorized_keys
+id -nG agentuser        # must NOT list google-sudoers
 ```
+
+Then reach it with **plain ssh through an IAP tunnel**, not `gcloud compute ssh`:
+
+```bash
+gcloud compute start-iap-tunnel "$VM" 22 --local-host-port=localhost:2222 --zone "$ZONE" &
+ssh -p 2222 agentuser@localhost
+```
+
+**Why not `gcloud compute ssh`:** it ensures its key is in project metadata for
+whatever username it is about to use, and adds it if absent. Two consequences,
+both observed:
+
+* Running it from a machine whose local username has no metadata entry
+  **silently creates a new account** on every VM in the project — and that account
+  lands in `google-sudoers`. A stray `gcloud compute ssh` from a workstation whose
+  local user is `alice` gets you an `alice` account with passwordless sudo on the
+  shared host.
+* It re-adds a key you have just deleted, **in the same invocation** that you use
+  to do the cleanup. Delete the metadata entry after your last `gcloud compute ssh`,
+  not before.
+
+`sudo gcloud compute project-info add-metadata --metadata=block-project-ssh-keys=TRUE`
+closes this off entirely by making instance-level keys the only accepted ones. Note
+that it also stops every existing metadata-key user from logging in, so plan the
+switch rather than running it on a live host.
+
+### Removing an account
+
+```bash
+sudo loginctl disable-linger olduser
+sudo userdel -r olduser              # refuses while the user has live processes
+sudo rm -rf /mnt/sandbox/users/olduser
+sudo sed -i '/^olduser:/d' /etc/subuid /etc/subgid   # userdel leaves these behind
+```
+
+Linger means "logged out" is not the same as "no processes", so if `userdel`
+refuses, stop the slice first — do not reach for `-f`, which leaves the account
+half-removed:
+
+```bash
+sudo loginctl terminate-user olduser
+```
+
+You cannot `userdel` the account you are logged in as. Either do it from another
+account, or defer it past your own session:
+
+```bash
+sudo systemd-run --on-active=15 --unit=remove-olduser /usr/local/sbin/remove-olduser.sh
+```
+
+If the account came from project metadata, remove its key too — and read, filter
+and write back the **whole** value, because `add-metadata` replaces it wholesale:
+
+```bash
+gcloud compute project-info describe --format=json \
+  | jq -r '.commonInstanceMetadata.items[] | select(.key=="ssh-keys") | .value' > keys.txt
+grep -v '^olduser:' keys.txt > keys.new
+diff keys.txt keys.new          # confirm ONLY olduser's lines went
+gcloud compute project-info add-metadata --metadata-from-file ssh-keys=keys.new
+```
+
+Run that from a laptop, not from the VM: the instance's own credentials cannot
+read project metadata (`Request had insufficient authentication scopes`).
 
 ## Capacity, not disk, is the real limit
 
