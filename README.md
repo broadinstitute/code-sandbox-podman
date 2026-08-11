@@ -450,6 +450,23 @@ Users pick the new image up on their next launch with no action of their own; no
 re-provisioning and no re-authentication. Anyone with a container already running
 keeps the old image until they exit and relaunch.
 
+Each rebuild leaves the previous image dangling as `<none>`, holding another
+~8 GB on the data disk. Reclaim it through the same script:
+
+```bash
+sudo ./scripts/build-shared-image.sh --prune
+```
+
+**Do not call `podman ... image prune` directly.** Prune rewrites the store's
+metadata as root `0600`, which undoes the `chmod -R a+rX` the build applies, and
+every user is then locked out of the store:
+
+    Error: configure storage: open /mnt/sandbox/imagestore/overlay-images/images.json: permission denied
+
+Nothing is damaged — it is one permission bit — but the fix is not obvious from
+the message, which is why prune and the chmod are a single command. If you do
+touch the store by hand, follow it with `sudo chmod -R a+rX /mnt/sandbox/imagestore`.
+
 ### Per-user setup (every user does this once)
 
 Six steps. 1, 4, 5 and 6 are one or two commands each; 2 and 3 are the

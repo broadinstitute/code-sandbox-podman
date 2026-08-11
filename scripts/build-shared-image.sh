@@ -38,6 +38,28 @@ if [[ "$(id -u)" != "0" ]]; then
     exit 1
 fi
 
+# --prune reclaims the ~8 GB each rebuild leaves behind as a dangling <none>
+# image. It lives in this script rather than as a documented two-command pair
+# because the chmod afterwards is mandatory and easy to omit: prune rewrites
+# overlay-images/images.json as root 0600, which undoes the chmod below, and every
+# user then gets
+#     Error: configure storage: open .../overlay-images/images.json: permission denied
+# Splitting the two across a README is how that happens, so they are one command.
+if [[ "${1:-}" == "--prune" ]]; then
+    echo "Pruning dangling images in ${STORE}"
+    echo
+    echo "  NOTE: this cannot see users' rootless containers. An image still in use"
+    echo "  by someone's running container is safe from prune only within this"
+    echo "  store's own view, so prefer running it when nobody has a live session."
+    echo
+    podman --root "$STORE" image prune --force
+    chmod -R a+rX "$STORE"
+    echo
+    du -sh "$STORE" | sed 's/^/  store size: /'
+    echo "  permissions restored (a+rX) — verify with: podman images (as a normal user)"
+    exit 0
+fi
+
 echo "Building claude-sandbox:${TAG_VERSION} into shared store ${STORE}"
 echo
 
@@ -67,8 +89,8 @@ cat <<EOF
 Done. Each user picks this up through ~/.config/containers/storage.conf.
 
 IMPORTANT ordering: a user sees nothing from this store until that file exists.
-provision-sandbox-user.sh writes it, so run that FIRST. Checking `podman images`
-before provisioning shows an empty list and `podman run` falls back to a registry
+provision-sandbox-user.sh writes it, so run that FIRST. Checking \`podman images\`
+before provisioning shows an empty list and \`podman run\` falls back to a registry
 pull -- which looks like the shared store failing when it is simply not
 configured yet.
 
@@ -97,5 +119,18 @@ NON-admin user with:
     du -sh ~/.local/share/containers   # should stay small: no local copy
 
 To update the image later, re-run this script. Users need do nothing; they pick
-up the new layers on their next launch.
+up the new layers on their next launch. Anyone with a container already running
+keeps the old image until they exit and relaunch.
+
+Each rebuild leaves the previous image dangling as <none>, holding another ~8 GB.
+Reclaim it with:
+
+    sudo ./scripts/build-shared-image.sh --prune
+
+Use that rather than calling podman prune directly. prune rewrites the store
+metadata as root 0600, which undoes the chmod this script applies, and users then
+hit "configure storage: open .../overlay-images/images.json: permission denied" on
+every command. --prune restores the permissions in the same breath. The same
+hazard applies to ANY rootful operation on this store: if you touch it by hand,
+re-run \`sudo chmod -R a+rX ${STORE}\` afterwards.
 EOF
