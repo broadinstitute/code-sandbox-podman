@@ -436,6 +436,20 @@ sudo ./scripts/build-shared-image.sh
 The image is built once by an admin. Users do not need to build it, and if the
 image store is shared read-only (below) they cannot.
 
+**Updating the image later.** Because users cannot build, a `docker/` change
+reaches nobody until an admin re-runs the build. `git pull` in the shared
+checkout is not enough — the store still holds the old layers:
+
+```bash
+cd /mnt/sandbox/repo
+git pull && chmod -R a+rX /mnt/sandbox/repo
+sudo ./scripts/build-shared-image.sh
+```
+
+Users pick the new image up on their next launch with no action of their own; no
+re-provisioning and no re-authentication. Anyone with a container already running
+keeps the old image until they exit and relaunch.
+
 ### Per-user setup (every user does this once)
 
 Six steps. 1, 4, 5 and 6 are one or two commands each; 2 and 3 are the
@@ -892,6 +906,30 @@ independently of the instance with `auto-delete=no`, so it survives VM deletion:
 
 `status: READY` with the instance listed under `users` means the data is intact
 and the problem is on the mount or permission side.
+
+### Troubleshooting: `Permission denied` writing inside the container's `$HOME`
+
+Symptom — a hook, or anything else writing to `/home/claude`, fails while
+`/workspace` works fine:
+
+    /home/claude/.claude/hooks/record-task-start.sh: line 21:
+    /home/claude/claude_task_start_warp: Permission denied
+
+This is a **stale shared image**, and it only appears on a shared image store.
+`/home/claude` used to be left at mode `755` owned by uid 1015, relying on the
+entrypoint to `chown` it at start-up — which the podman path skips, since the
+container already starts unprivileged. That was invisible with a per-user
+rootless store, where on-disk layer uids and the runtime user namespace agree.
+The shared store is built by **rootful** podman, so `/home/claude` is owned by
+*real* uid 1015, which is not in your namespace map — it appears unmapped, and
+`755` denies the write.
+
+The Dockerfile now bakes `/home/claude` world-writable, so the fix is for an
+admin to rebuild (see *Updating the image later* above); users need do nothing
+but relaunch. To confirm which image you are on:
+
+    podman run --rm localhost/claude-sandbox:0.0.1 stat -c '%a %n' /home/claude
+    # 777 → fixed.   755 → stale, ask an admin to rebuild.
 
 ## Build
 

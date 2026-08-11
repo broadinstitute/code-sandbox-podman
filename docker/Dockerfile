@@ -117,7 +117,26 @@ RUN uv venv --python "${CLAUDE_VENV_PYTHON}" /opt/claude-venv && \
 # expand attack surface.
 # /opt/uv-python is included: the venv symlinks its interpreter out of there, so
 # it has to be traversable by whatever uid the container ends up running as.
-RUN chmod -R a+rwX /opt/claude-venv /opt/uv-python /usr/local/cargo /usr/local/rustup
+#
+# /home/claude is included for a subtler reason, and leaving it out was a real
+# bug. Upstream relied on uid-fixup-entrypoint.sh doing `chown -R /home/claude`
+# at start-up, but that runs only in the root-start branch, which the podman path
+# skips (the container already starts unprivileged under --userns=keep-id).
+#
+# That was survivable with a per-user rootless image store, where the on-disk
+# layer uids and the runtime user namespace are consistent, so /home/claude really
+# did appear owned by container uid 1015. It breaks with the SHARED store, which
+# is built by ROOTFUL podman: /home/claude is then owned by real uid 1015 on disk,
+# a uid that is not in the consuming user's namespace map, so it appears unmapped
+# and mode 755 denies the write. The symptom is any hook or tool writing to $HOME
+# failing with EACCES, e.g.
+#   /home/claude/.claude/hooks/record-task-start.sh: line 21:
+#   /home/claude/claude_task_start_warp: Permission denied
+#
+# Making it world-writable at build time removes the dependency on uid mapping
+# entirely. Same trade-off already accepted above: the container is single-user.
+RUN chmod -R a+rwX /opt/claude-venv /opt/uv-python /usr/local/cargo /usr/local/rustup \
+                   /home/claude
 
 # Remove ensurepip, which is what actually eliminates pip. There are TWO
 # interpreters in this image and both ship it:
@@ -152,6 +171,20 @@ ENV JAVA_HOME=/opt/java/openjdk \
 
 # Files baked into the claude home dir. Container starts as root so the uid
 # fixup entrypoint can usermod the claude user before dropping privileges.
+#
+# These COPYs land AFTER the chmod a+rwX layer above, so their modes are what
+# they say here. start_script.sh / start_dockerd.sh are 755 and .bash_aliases is
+# 644, all of which stay usable no matter which uid the container runs as.
+#
+# .msmtprc is the one exception and is knowingly left as-is: 600 owned by uid
+# 1015 means it is UNREADABLE when the runtime uid does not map to 1015, which
+# is the shared-image-store case described above. It cannot get the same
+# treatment, because msmtp refuses to use a config file that is group- or
+# world-readable. The blast radius is limited to the optional email-notify hooks,
+# which no-op unless CLAUDE_NOTIFY_EMAIL is set, and the file holds no secret
+# (auth off, no password). If email notification is ever wanted on a shared
+# store, the fix is to bind-mount an msmtprc from the host rather than to loosen
+# this mode.
 COPY --chown=claude:claude msmtprc /home/claude/.msmtprc
 RUN chmod 600 /home/claude/.msmtprc
 
