@@ -207,9 +207,17 @@ echo "=== checkout freshness ==="
 # this check useless for exactly the users who most need it. `ls-remote` queries
 # the remote and writes nothing locally.
 if [[ -d "${REPO_ROOT}/.git" ]]; then
-    _branch=$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
-    _local=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)
-    _remote=$(git -C "$REPO_ROOT" ls-remote origin "refs/heads/${_branch}" 2>/dev/null | cut -f1)
+    # -c safe.directory is required, not defensive. The shared checkout is owned
+    # by the admin, and git refuses to run in a repository owned by another user:
+    #   fatal: detected dubious ownership in repository at '<path>'
+    # That applies to plain reads like rev-parse too, so without this the check
+    # silently degrades to "could not reach the remote" for exactly the
+    # non-owning users it exists to help. Passing it with -c affects this
+    # invocation only and writes nothing to the user's gitconfig.
+    _git=(git -c "safe.directory=${REPO_ROOT}" -C "$REPO_ROOT")
+    _branch=$("${_git[@]}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    _local=$("${_git[@]}" rev-parse HEAD 2>/dev/null || true)
+    _remote=$("${_git[@]}" ls-remote origin "refs/heads/${_branch}" 2>/dev/null | cut -f1)
 
     if [[ -z "$_remote" ]]; then
         warn "could not reach the remote to check if this checkout is current"
@@ -218,8 +226,10 @@ if [[ -d "${REPO_ROOT}/.git" ]]; then
         warn "  local  ${_local:0:8}"
         warn "  remote ${_remote:0:8}"
         warn "  The steps printed at the end come from THIS checkout, so some may"
-        warn "  be out of date. Ask whoever owns ${REPO_ROOT} to run:"
+        warn "  be out of date. This is not something you can fix unless you own"
+        warn "  the checkout — a non-owner cannot pull it. Ask its owner to run:"
         warn "    git -C ${REPO_ROOT} pull && chmod -R a+rX ${REPO_ROOT}"
+        warn "  then re-run this script."
     else
         ok "checkout matches origin/${_branch} (${_local:0:8})"
     fi
