@@ -16,7 +16,7 @@
 # It also needs NO root. Everything it touches is either the user's own home or
 # their own directory under the data disk. That is a deliberate constraint: an
 # admin sets the host up once, and every user after that onboards themselves.
-# The only prerequisites that need root are the one-time host steps in the README
+# The only prerequisites that need root are the one-time host steps in SERVER.md
 # (packages, uv, the data disk, `chmod 1777` on users/, and building the shared
 # image store). This script checks each of those and names the exact command an
 # admin should run if one is missing, rather than failing obscurely.
@@ -52,7 +52,7 @@ for b in podman pasta uv git fuse-overlayfs; do
     if command -v "$b" >/dev/null 2>&1; then
         ok "$b present"
     else
-        fatal "$b missing — the admin needs to install it (see README, GCP VM section)"
+        fatal "$b missing — the admin needs to install it (see SERVER.md, \"Host packages\")"
     fi
 done
 
@@ -114,7 +114,7 @@ done
 
 if [[ ! -d "$SANDBOX_ROOT" ]]; then
     fatal "$SANDBOX_ROOT does not exist. The admin must format and mount the"
-    echo "          data disk first (README, GCP VM section)."
+    echo "          data disk first (SERVER.md, \"Format and mount the data disk\")."
 elif [[ ! -d "${SANDBOX_ROOT}/users" ]]; then
     fatal "${SANDBOX_ROOT}/users does not exist. One-time admin step:"
     echo "            sudo mkdir -p ${SANDBOX_ROOT}/users"

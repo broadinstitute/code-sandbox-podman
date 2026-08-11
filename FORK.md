@@ -162,7 +162,8 @@ refused rather than being unable to name it. Real protection, but a guard, not a
 
 ## Verification performed
 
-Image `localhost/claude-sandbox:0.0.1`, 8.68 GB (upstream README says ~3 GB).
+Image `localhost/claude-sandbox:0.0.1`, 8.3 GB — 8303325333 bytes as
+`podman image inspect` reports it (upstream README says ~3 GB).
 
 | Gate | Result |
 |---|---|
