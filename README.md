@@ -978,6 +978,122 @@ Each accepted mount prints `ro-mount: <host> -> /read-only-reference/<name>` at 
 
 The interactive launcher (`start_sandbox.sh`) shows a one-line `RO mounts` summary in each area's preview pane — count + first three basenames.
 
+## Read-write project mounts, and how pushing works
+
+The agent edits real checkouts in place; **you** push them. The container holds no
+git credentials of any kind, so this is enforced by construction rather than by
+policy or by asking the agent nicely.
+
+### Mounting repos
+
+`CLAUDE_SANDBOX_RW_MOUNTS` is a space-separated list of host directories, each
+surfacing at `/projects/<basename>` inside the container, read-write. It ships
+**commented out** in both env templates, so out of the box the agent sees only
+`/workspace`.
+
+```bash
+export CLAUDE_SANDBOX_RW_MOUNTS="$HOME/git/warp $HOME/git/warp-tools"
+```
+
+Names are picked by basename, with parent segments prepended on collision (so
+`/a/b/data` and `/x/y/data` become `/projects/b_data` and `/projects/y_data`).
+Host paths must already exist; the launcher refuses to start otherwise rather than
+letting the engine create an empty directory.
+
+On a shared VM, clone into the **data disk**, not `$HOME` — home directories live
+on the small boot disk:
+
+```bash
+mkdir -p /mnt/sandbox/users/$USER/repos
+cd /mnt/sandbox/users/$USER/repos
+git clone https://github.com/your-org/your-repo
+# then in env.<USER>.sh:
+#   export CLAUDE_SANDBOX_RW_MOUNTS="/mnt/sandbox/users/$USER/repos/your-repo"
+```
+
+Files the agent writes come out owned by **you** on the host, because the
+container runs with `--userns=keep-id:uid=1015`. No `sudo`, no ownership repair —
+you just `cd` in and use git normally.
+
+### Authenticating yourself to GitHub
+
+On the host, as your own user — never inside the container:
+
+```bash
+command -v gh || sudo apt-get install -y gh
+gh auth login --web
+```
+
+`--web` prints a one-time code you complete in a browser on your own machine,
+which is what makes this work on a headless VM. Paste that code into the
+**browser**, not into a terminal you share or a chat log; it is single-use
+credential material.
+
+That writes two things, both in your home directory:
+
+* `~/.config/gh/hosts.yml` — the token
+* `~/.gitconfig` — gains
+  `[credential "https://github.com"] helper = !gh auth git-credential`
+
+**Neither is ever mounted into the container.** The host `~/.gitconfig` is
+deliberately excluded for exactly this reason; only `user.name` and `user.email`
+are forwarded, as `SANDBOX_GIT_USER_NAME` / `_EMAIL`, so commits are attributed
+but unpushable. And it fails twice over: even if a repo's own `.git/config`
+carried that helper, the helper shells out to `gh`, which is not installed in the
+image.
+
+### The loop
+
+```bash
+# 1. agent works inside, and commits
+./run_claude_docker.sh
+#    it edits /projects/<repo> and runs `git commit`
+#    `git push` cannot authenticate, by design
+
+# 2. exit, and review on the host — same repo, host-side path
+cd <the host path you mounted>
+git log  --oneline origin/HEAD..HEAD    # what it added
+git diff origin/HEAD..HEAD              # what it actually changed
+
+# 3. you push
+git push origin HEAD
+```
+
+### Two things this does not protect
+
+**Review is the real control.** The credential boundary stops the agent
+*reaching* GitHub. It does not stop it authoring something you then push
+yourself — including changes to CI workflows or build scripts. `git diff
+origin/HEAD..HEAD` before pushing is the actual gate, not the missing token.
+
+**Local git history is unprotected.** In `bypassPermissions` mode, with no
+destructive-git deny rules, `git reset --hard`, `git clean -fd`, `branch -D` and
+history rewrites all work inside these mounted checkouts. Nothing can leave the
+machine, but uncommitted or unpushed work can be destroyed. Commit or stash
+anything you cannot lose before a long unattended run.
+
+To close that second gap, add deny rules — they are the only control that still
+applies in `bypassPermissions` mode:
+
+```json
+{
+  "permissions": {
+    "deny": [
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(git stash drop:*)",
+      "Bash(git stash clear:*)",
+      "Bash(git branch -D:*)"
+    ]
+  }
+}
+```
+
+`Bash(git push:*)`, `git remote add` and `git remote set-url` are already denied
+in the shipped settings — redundant while there is no credential to use, but it
+keeps the boundary a stated rule rather than an artefact of what happens not to be
+installed.
+
 ## Persistence
 
 - **Per-instance mode** — everything in `$SANDBOX_HOME` (settings + state + sessions + caches), preserved across runs of that instance only.
