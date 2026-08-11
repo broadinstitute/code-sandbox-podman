@@ -290,6 +290,13 @@ the host.
 including 15 `nvidia-*` CUDA wheels — several GB per user, for hardware neither the
 shared VM nor most laptops here have. With it: 90 packages, **zero** CUDA wheels.
 
+**If you actually need to train**, CPU wheels will not do, and the shared VM has no
+GPU to give you. Adding one is an admin job and a VM rebuild, not a setting — the
+E2 machine family cannot host a GPU at all. Procedure, quota status and the
+per-user opt-in are in
+[Attaching a GPU](SERVER.md#attaching-a-gpu). With a GPU present, install with
+`--torch-backend auto` instead, which matches the wheel to the installed driver.
+
 Add `.venv/` and `.uv-cache/` to the project's `.gitignore`. Pin what you install in
 the project's own `pyproject.toml` or `requirements.txt` — the point of a per-project
 venv is that two projects can disagree about versions.

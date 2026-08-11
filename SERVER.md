@@ -30,6 +30,7 @@ NETWORK=default          # see the note under "Create the instance"
 - [The shared image store](#the-shared-image-store)
 - [Updating the image later](#updating-the-image-later)
 - [Adding a user](#adding-a-user)
+- [Attaching a GPU](#attaching-a-gpu)
 - [Capacity, not disk, is the real limit](#capacity-not-disk-is-the-real-limit)
 - [Rebuilding for more cores](#rebuilding-for-more-cores)
 
@@ -416,6 +417,162 @@ gcloud compute project-info add-metadata --metadata-from-file ssh-keys=keys.new
 Run that from a laptop, not from the VM: the instance's own credentials cannot
 read project metadata (`Request had insufficient authentication scopes`).
 
+## Attaching a GPU
+
+Needed for `scvi-tools` and anything else that trains a model; the CPU wheels are
+fine for inspecting data and for small runs, but not for real training.
+
+> **Status: procedure, not a transcript.** Every *fact* below was checked against
+> this project (zone inventory, quota, package availability, what the launcher
+> does) and is marked as such. But no GPU VM has been built here, so unlike the
+> rest of this document the sequence has not been run end to end. Expect to debug
+> the driver step.
+
+### It requires a rebuild, not an attach
+
+Two independent reasons:
+
+* **`e2-highmem-8` cannot host a GPU.** The E2 family supports no accelerators at
+  all, so the current machine type is disqualified regardless.
+* **gcloud has no way to attach one to an existing instance** — verified: neither
+  `gcloud compute instances update` nor `set-machine-type` has an `--accelerator`
+  flag.
+
+So this folds into [Rebuilding for more cores](#rebuilding-for-more-cores) — same
+procedure, extra flags at create time. The data disk carries everything across, so
+no user loses work or has to re-authenticate.
+
+### Picking the machine
+
+Verified available in `us-central1-c`: L4, T4, V100, P100, P4, A100 40GB, H100.
+Two sensible shapes:
+
+| | machine type | GPU | notes |
+|---|---|---|---|
+| **Recommended** | `g2-standard-8` | 1 × **L4**, 24 GB VRAM, built in | Ada-generation, current, no `--accelerator` flag needed — the GPU is part of the machine type |
+| Cheaper | `n1-standard-8` + `--accelerator` | 1 × **T4**, 16 GB VRAM | Older; T4 is still plenty for most scVI-scale models |
+
+**Quota is already in place** — verified in this project for `us-central1`:
+`NVIDIA_L4_GPUS` = 32, `NVIDIA_T4_GPUS` = 16, `NVIDIA_A100_GPUS` = 16. No quota
+request needed. (`NVIDIA_A100_80GB_GPUS` is 0, so the 80 GB A100 *would* need one.)
+
+Create it as in the rebuild runbook, with these differences:
+
+```bash
+gcloud compute instances create "$NEW" \
+  --zone "$ZONE" \
+  --machine-type g2-standard-8 \
+  --maintenance-policy TERMINATE \
+  --image-family debian-13 --image-project debian-cloud \
+  --boot-disk-size 50GB --boot-disk-type pd-balanced \
+  --network "$NETWORK" --subnet "$NETWORK" \
+  --address sandbox-ip \
+  --no-service-account --no-scopes \
+  --disk name=sandbox-data,device-name=sandbox-data,mode=rw,auto-delete=no
+
+# For the n1 + T4 route instead, add:
+#   --machine-type n1-standard-8 \
+#   --accelerator type=nvidia-tesla-t4,count=1
+```
+
+**`--maintenance-policy TERMINATE` is mandatory**, not a preference: GPU instances
+cannot live-migrate, and the create is rejected without it.
+
+### Host driver
+
+Debian 13 ships one, which is the simplest route — verified present in the archive
+as `nvidia-driver 550.163.01-2` (trixie, `non-free`):
+
+```bash
+sudo sed -i 's/ main$/ main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources 2>/dev/null \
+  || sudo apt-edit-sources    # whichever your image uses; the point is to enable non-free
+sudo apt-get update
+sudo apt-get install -y nvidia-driver firmware-misc-nonfree
+sudo reboot
+```
+
+After the reboot:
+
+```bash
+nvidia-smi        # must list the L4/T4 and report a CUDA version
+```
+
+Driver 550 gives a CUDA 12.4 runtime, which matters for the torch wheel choice
+below. If you need newer, `trixie-backports` has `550.163.01-4~bpo13+1`, and NVIDIA
+publishes its own repo for Debian 13 — verified live at
+`developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/`. Google's
+`compute-gpu-installation` installer script also exists, but I could not confirm it
+claims Debian 13 support, so treat it as a fallback rather than the first choice.
+
+### Container toolkit and the CDI spec
+
+Rootless podman does **not** use `--gpus`; it needs a CDI spec, which is what
+`nvidia-ctk` generates. The toolkit is **not in the Debian archive** (verified), so
+it comes from NVIDIA's repo — which is distro-agnostic now, so trixie is fine:
+
+```bash
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+
+# The bit rootless podman actually consumes:
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+nvidia-ctk cdi list          # should show nvidia.com/gpu=all and nvidia.com/gpu=0
+```
+
+**Regenerate the CDI spec after every driver upgrade.** It pins device and library
+paths, so a driver bump silently invalidates it and containers then fail to start
+with missing-library errors.
+
+Verify passthrough before telling users it works:
+
+```bash
+podman run --rm --device nvidia.com/gpu=all localhost/claude-sandbox:0.0.1 nvidia-smi -L
+```
+
+### Letting users have it
+
+GPU passthrough is **opt-in and off by default**. Each user adds one line to their
+own `env.<USER>.sh`:
+
+```bash
+export CLAUDE_SANDBOX_GPU=1
+```
+
+The launcher then looks for `/etc/cdi/nvidia.yaml` (or `/var/run/cdi/nvidia.yaml`)
+and passes `--device nvidia.com/gpu=all`. If the spec is missing it prints the
+`nvidia-ctk cdi generate` command and **continues without the GPU** rather than
+failing — so a silently CPU-only run is possible; check the launch output.
+
+Then `scvi-tools` should be installed against CUDA rather than CPU:
+
+```bash
+uv pip install --torch-backend auto scvi-tools    # 'auto' detects the driver
+.venv/bin/python -c 'import torch; print(torch.cuda.is_available(), torch.version.cuda)'
+```
+
+`auto` picks a wheel matching the installed driver. Be careful pinning by hand: with
+driver 550 (CUDA 12.4) a `cu13x` wheel will not run — CUDA 13 needs a 580-series
+driver. `cu129` and below are safe on 550.
+
+### Two things to think about before doing it
+
+**One GPU, several users, no isolation between them.** `--device nvidia.com/gpu=all`
+gives every sandbox the whole GPU. Nothing partitions VRAM, so one agent's training
+run can OOM everyone else's, and GPU processes are visible across users. Enable
+`CLAUDE_SANDBOX_GPU=1` for the people who need it rather than in the template, and
+treat concurrent training as something to coordinate socially. Time-slicing or MIG
+(A100 only) would be the technical fix, and neither is set up here.
+
+**Cost.** A `g2-standard-8` is several times the price of `e2-highmem-8`, billed
+whenever the VM is running, whether or not the GPU is busy. If GPU work is bursty,
+consider a second, separate GPU instance that mounts its own data disk and gets
+stopped when idle, rather than making the always-on shared host expensive for
+everyone.
+
 ## Capacity, not disk, is the real limit
 
 CPU is the ceiling. A live sandbox measures ~547 MB resident but ~147% CPU at
@@ -433,6 +590,9 @@ The cap is only real with cgroup v2 delegation; see
 [the FAQ](FAQ.md#is-claude_sandbox_memory-actually-enforced).
 
 ## Rebuilding for more cores
+
+This is also the procedure for [adding a GPU](#attaching-a-gpu), which cannot be
+attached to an existing instance and is not supported by the E2 family at all.
 
 `gcloud compute instances set-machine-type` can resize in place but requires a
 stop/start anyway. Since you are taking an outage regardless, a fresh instance is

@@ -30,7 +30,7 @@ before launching. Templates: `env.podman.example.sh` (local),
 | `CLAUDE_SANDBOX_MEMORY` | `16g` | `--memory` / `--memory-swap`. Only enforced with cgroup v2 delegation. |
 | `CLAUDE_SANDBOX_CPUS` | unset | `--cpus`. |
 | `CLAUDE_SANDBOX_SHM_SIZE` | `2g` | The 64 MB default breaks matplotlib/jupyter. |
-| `CLAUDE_SANDBOX_GPU` | `0` | Needs a CDI spec: `sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml`. |
+| `CLAUDE_SANDBOX_GPU` | `0` | Needs a CDI spec on the host: `sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml`. Whole procedure, including the VM rebuild a GPU requires, in [SERVER.md](SERVER.md#attaching-a-gpu). Missing spec = warns and runs **without** the GPU. |
 | `CLAUDE_SANDBOX_RO_MOUNTS` | unset | Space-separated host dirs → `/read-only-reference/<name>`. |
 | `CLAUDE_SANDBOX_RW_MOUNTS` | unset | Space-separated host dirs → `/projects/<name>`, read-write. |
 | `CLAUDE_SANDBOX_GCP_PROJECT` | unset | Forwarded to host fiss-mcp as `GOOGLE_CLOUD_PROJECT`. Required for the GCS tools. |
