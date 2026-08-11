@@ -137,8 +137,8 @@ binary the `docker ps` calls fail silently and every sandbox reports as not runn
 
 No credential of any kind is baked into the image or mounted into the container.
 
-- **Claude Code** — the container runs its own `/login` on first launch; the token is
-  written to the sandbox state dir. The host's `~/.claude` is never mounted.
+- **Claude Code** — the container authenticates itself on first launch (it prompts for
+  a login method; no `/login` needed) and writes the token to the sandbox state dir. The host's `~/.claude` is never mounted.
 - **Terra/GCP** — fiss-mcp runs on the **host** and inherits host gcloud ADC. The image
   has no `gcloud`, no `gsutil`, no `google-cloud-*` libraries and no `~/.config/gcloud`
   mount (all verified below). The MCP endpoint is the only path from the sandbox to Terra.
@@ -211,7 +211,7 @@ The fiss-mcp venv is **not relocatable** — uv bakes absolute paths into `pyven
 source env.nobara.sh
 ./setup_host.sh                  # verify-only; installs nothing, changes no system state
 cd docker && make ENGINE=podman && cd ..
-./run_claude_docker.sh           # then /login once, inside
+./run_claude_docker.sh           # first run walks you through login
 ```
 
 `./start_sandbox.sh` (fzf menu) also works.

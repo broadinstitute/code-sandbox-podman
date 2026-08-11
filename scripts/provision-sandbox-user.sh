@@ -400,7 +400,9 @@ What is left, per the README:
                            "not necessary" prompt on a GCE VM)
   Step 3  GitHub           gh auth login --web, THEN gh auth setup-git
   Step 4  fiss-mcp venv    cd ${REPO_ROOT} && source ${ENV_FILE} && ./setup_host.sh
-  Step 5  Launch           ./run_claude_docker.sh   (then /login once, inside)
+  Step 5  Launch           ./run_claude_docker.sh
+                           first run asks you to pick a login method: choose the
+                           first one, then open the URL it prints and paste the code
 
 Your workspace is already populated, so step 5 opens onto real code. Add more
 repos any time with:

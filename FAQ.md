@@ -223,14 +223,25 @@ ADC`. That sets `quota_project_id`, which is not a project source:
 `quota_project_id` populated, not assumed — the same applies to
 `gcloud auth application-default set-quota-project`, which is a red herring here.
 
-### Why are the fiss-mcp write tools missing?
+### The fiss-mcp write tools are listed but refuse to run
 
-Deliberate. Read-only is the default: `submit_workflow`, `abort_submission`,
-`update_method_config`, `copy_method_config` and `upload_entities` are never
-registered unless `FISS_MCP_ALLOW_WRITES=1`, and `download_gcs_file` is removed
-outright unless `FISS_MCP_ALLOW_HOST_WRITES=1` because it writes to a
-*host* path of the agent's choosing. All are additionally in the settings deny
-list. See [COMPONENTS.md](COMPONENTS.md#fiss-mcp-terra-runs-on-the-host).
+```
+This server is running in read-only mode.
+```
+
+Deliberate, and note that the tools really are *listed*: `submit_workflow`,
+`abort_submission`, `update_method_config`, `copy_method_config` and
+`upload_entities` stay registered and visible in `tools/list`, but each one checks
+`FISS_MCP_ALLOW_WRITES` at call time and raises that error when it is off. Upstream's
+README implies they are absent in read-only mode; measured, they are not.
+
+`download_gcs_file` is the exception and is genuinely removed unless
+`FISS_MCP_ALLOW_HOST_WRITES=1`, because it writes to a *host* path of the agent's
+choosing — an escape route rather than a Terra mutation.
+
+All of them are also in the settings deny list, which is what actually stops the
+agent calling them under `bypassPermissions`. Details in
+[COMPONENTS.md](COMPONENTS.md#what-write-mode-gates).
 
 ### A pet service account cannot read the bucket I need
 

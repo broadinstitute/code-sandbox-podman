@@ -26,8 +26,8 @@
 #
 # Nothing here handles authentication. Terra/GCP access uses whatever gcloud
 # credentials already exist on the host, and the operator runs any
-# `gcloud auth login` themselves. Claude Code authenticates with its own
-# /login inside the container on first launch.
+# `gcloud auth login` themselves. Claude Code authenticates itself inside the
+# container on first launch, with its own token and no host credential.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"

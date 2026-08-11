@@ -75,8 +75,10 @@ cd docker && make && cd ..
 ./run_claude_docker.sh
 ```
 
-First launch prompts `/login` inside the container. The OAuth token persists into
-that sandbox's own state directory, so later launches skip it. No host-side Claude
+On first launch Claude Code asks you to pick a login method — choose the first
+option (Claude account with subscription) and complete the URL-and-code prompt it
+shows. No need to type `/login`. The OAuth token persists into that sandbox's own
+state directory, so later launches go straight to a session. No host-side Claude
 Code install is needed and the host's `~/.claude/` is never mounted.
 
 Then give the agent something to work on — clone into the directory you set as
@@ -198,7 +200,8 @@ credentials.
 It is needed even though gcloud reports adding a quota project — a quota project
 is [not a project source](FAQ.md#fiss-mcp-gcs-tools-fail-with-project-was-not-passed-and-could-not-be-determined-from-the-environment).
 
-**3. GitHub** — to push from this host.
+**3. GitHub** — to push from this host. Everyone needs this: pushing is what your
+host account is *for*, since the agent cannot do it.
 
 ```bash
 gh auth login --web
@@ -224,8 +227,14 @@ source /mnt/sandbox/users/$USER/env.$USER.sh
 ./setup_host.sh
 ```
 
-**5. Launch.** On the first run, type `/login` inside to authenticate Claude Code.
-The token goes to your own state dir; the host's `~/.claude` is never mounted.
+**5. Launch.** Claude Code authenticates itself on the first run — you do not need
+to type `/login`. It shows a login-method picker: choose the **first option**
+(Claude account with subscription), and it prints a URL and a code. Open the URL on
+your laptop, since the VM is headless, and paste the code there.
+
+The token goes to your own state dir, so later launches start straight into a
+session; the host's `~/.claude` is never mounted. `/login` still works if you ever
+need to re-authenticate or switch accounts.
 
 ```bash
 cd /mnt/sandbox/repo

@@ -130,20 +130,29 @@ FISS_MCP_ALLOW_WRITES=1 ./run_claude_docker.sh    # WRITE MODE (loud banner)
 
 ### What write-mode gates
 
-Read-only is not a filter over a full toolset — the write tools are never
-registered:
+The two gates work by **different mechanisms**, and the difference matters if you
+are reasoning about what the agent can reach:
 
-| Tool | Gate |
-|---|---|
-| `submit_workflow`, `abort_submission`, `update_method_config`, `copy_method_config`, `upload_entities` | `FISS_MCP_ALLOW_WRITES=1` |
-| `download_gcs_file` | `FISS_MCP_ALLOW_HOST_WRITES=1` |
+| Tool | Gate | Mechanism when the gate is off |
+|---|---|---|
+| `submit_workflow`, `abort_submission`, `update_method_config`, `copy_method_config`, `upload_entities` | `FISS_MCP_ALLOW_WRITES=1` | **Registered and visible** in `tools/list`; each begins with `_check_write_access(ctx)` and raises `ToolError` — *"This server is running in read-only mode."* |
+| `download_gcs_file` | `FISS_MCP_ALLOW_HOST_WRITES=1` | **Not registered at all** — removed with FastMCP's `remove_tool` at start-up |
 
-`download_gcs_file` is separated because it is the one tool that writes to a
-**host** path chosen by the agent, which would be a way out of the sandbox rather
-than a Terra mutation. It is removed with FastMCP's `remove_tool` at start-up, and
-the server refuses to start if the removal fails rather than serving it
-unguarded. All of these are additionally in the shipped `permissions.deny` list —
-the only control that still applies under `bypassPermissions`.
+Upstream's README implies read-only means the write tools are absent. It does not:
+verified by calling `submit_workflow` and `abort_submission` with valid arguments
+against this install, and both returned the read-only error rather than failing as
+unknown tools. A runtime guard is a perfectly good control, but "the agent cannot
+see the tool" and "the tool refuses to act" are different claims, and only the
+second one is true here.
+
+`download_gcs_file` gets the stronger treatment because it is the one tool that
+writes to a **host** path chosen by the agent — a way out of the sandbox rather
+than a Terra mutation. The server refuses to start if the removal fails, rather
+than serving it unguarded.
+
+All of them are additionally in the shipped `permissions.deny` list, which is the
+only control that still applies under `bypassPermissions`. That is the layer that
+makes the guarded-but-visible tools unreachable rather than merely unhelpful.
 
 `FISS_MCP_ALLOW_WRITES=1` prints a red ASCII-art banner on the host **and** inside
 the container (pre-rendered; no `figlet` dependency), because it lets the agent
