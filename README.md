@@ -469,10 +469,34 @@ Cloud. SSH used your *SSH key* from project metadata, which has nothing to do
 with your Google identity. fiss-mcp reads credentials from your own
 `~/.config/gcloud`, so step 2 is required even though you got in "with GCP".
 
+**0. SSH in — from your own laptop, not from the VM.** Substitute the real
+instance name and zone. Nothing sets `$VM`/`$ZONE` for you: they are defined only
+inside the admin section above, which you do not run, so pasting a command that
+references them expands to nothing and gives
+
+    ERROR: (gcloud.compute.ssh) could not parse resource []
+
+Note also that the zone is a **zone**, not a region — `us-central1-c`, not
+`us-central1`.
+
 ```bash
-# 0. ssh in
-gcloud compute ssh "$VM" --zone "$ZONE"
+gcloud compute ssh warp-claude-sandbox-2 --zone us-central1-c
 ```
+
+If you are **already** on the VM — you clicked *SSH* in the Cloud Console, which
+works fine — then skip this step entirely; you are in. Do not run the command
+above from inside the VM. It fails with:
+
+    ERROR: (gcloud.compute.ssh) Could not fetch resource:
+     - Request had insufficient authentication scopes.
+
+That is not a permissions problem with your account. Inside the VM, and before
+you have run step 2, gcloud authenticates as the VM's *attached service account*
+via the metadata server, and that service account is deliberately scoped to
+`devstorage.read_only`, `logging.write`, `monitoring.write`, `pubsub`,
+`servicecontrol` and `trace.append` — no `compute` scope, so the Compute API
+refuses the call regardless of who you are. Step 2 replaces that credential with
+your own identity.
 
 **1. Provision.** Creates your directories on the data disk, seeds your Claude
 settings, writes your `env.<USER>.sh`, and enables linger. Authenticates nothing.
