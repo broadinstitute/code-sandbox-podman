@@ -685,6 +685,54 @@ cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.c
 Also run `loginctl enable-linger $USER` so a user's containers and their
 host-side fiss-mcp survive their SSH session closing.
 
+### Troubleshooting: "all my work is gone"
+
+Two failure modes make a populated data disk look empty. Neither loses anything,
+and they are distinguishable in one command.
+
+**1. `ls: cannot open directory '/mnt/sandbox': Permission denied`**
+
+The disk is mounted; you simply cannot list the directory. `ls` needs **read** on
+a directory, while `cd` only needs **execute**, so mode `751` on the mountpoint
+lets you sit inside it and still refuse to list it. Paths *inside* keep working:
+
+    findmnt /mnt/sandbox            # mounted, so this is not a mount problem
+    ls /mnt/sandbox/repo            # works even while the parent will not list
+    stat -c '%a %U:%G %n' /mnt/sandbox
+
+Fix:
+
+    sudo chmod 755 /mnt/sandbox
+
+The mountpoint has to be world-readable; `users/` underneath it is `1777` so each
+user can create their own directory, and each user's own directory is `700`.
+
+**2. `findmnt /mnt/sandbox` prints nothing**
+
+The disk is not mounted and you are looking at a bare mountpoint on the boot
+disk. Everything — the checkout, the image store, every user's state — lives
+under this mount, so an unmounted disk looks identical to a wiped one.
+
+    lsblk                                    # is the 200 GB disk visible at all?
+    grep sandbox /etc/fstab                  # is there an entry?
+    sudo mount -a && findmnt /mnt/sandbox
+
+If `/etc/fstab` has no entry, add one. Key it on **UUID**, not a device path: the
+data disk has been observed moving between `/dev/sda` and `/dev/sdb` across
+reboots, and a device-path entry would then mount the wrong disk or fail.
+
+    echo "UUID=$(sudo blkid -s UUID -o value /dev/disk/by-id/google-sandbox-data) \
+    /mnt/sandbox ext4 discard,defaults,nofail 0 2" | sudo tee -a /etc/fstab
+
+**Before assuming data loss, check the disk still exists.** It is created
+independently of the instance with `auto-delete=no`, so it survives VM deletion:
+
+    gcloud compute disks describe sandbox-data --zone "$ZONE" \
+      --format="value(name,sizeGb,status,users)"
+
+`status: READY` with the instance listed under `users` means the data is intact
+and the problem is on the mount or permission side.
+
 ## Build
 
 ```bash
