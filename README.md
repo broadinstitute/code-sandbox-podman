@@ -198,7 +198,7 @@ credentials.
 It is needed even though gcloud reports adding a quota project — a quota project
 is [not a project source](FAQ.md#fiss-mcp-gcs-tools-fail-with-project-was-not-passed-and-could-not-be-determined-from-the-environment).
 
-**3. GitHub** — skip if you never push from this host.
+**3. GitHub** — to push from this host.
 
 ```bash
 gh auth login --web
