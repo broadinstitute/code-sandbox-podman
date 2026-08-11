@@ -88,7 +88,12 @@ export CLAUDE_SANDBOX_STATE_ROOT=__USER_ROOT__
 # Note that `gcloud auth application-default set-quota-project` does NOT satisfy
 # this: it sets quota_project_id, but google.auth.default() still reports
 # project=None. Set a project where YOU have serviceusage.services.use.
-export CLAUDE_SANDBOX_GCP_PROJECT=
+#
+# Default for the WARP deployment. A GCP project id is not a secret and grants
+# nothing on its own — reach comes from your own IAM on the buckets. Change it if
+# you are deploying elsewhere; the only requirement is that you hold
+# serviceusage.services.use on whatever you name.
+export CLAUDE_SANDBOX_GCP_PROJECT=warp-pipeline-dev
 
 # Terra MCP. The server runs on the HOST as you, using your own gcloud ADC. The
 # container has no gcloud, no gsutil, no google-cloud-* libraries and no

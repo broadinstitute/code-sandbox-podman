@@ -505,7 +505,7 @@ Terra workspaces — fiss-mcp needs *your* credentials, read from your own
 Then set your project in `env.<USER>.sh`:
 
 ```bash
-export CLAUDE_SANDBOX_GCP_PROJECT=<project where you have serviceusage.services.use>
+export CLAUDE_SANDBOX_GCP_PROJECT=warp-pipeline-dev   # substitute your own
 ```
 
 Do this **even though** gcloud finishes by reporting
