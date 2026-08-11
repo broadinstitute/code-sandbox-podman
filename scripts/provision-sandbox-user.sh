@@ -287,7 +287,7 @@ if [[ -d "$IMAGE_STORE" ]]; then
 # merged rootfs comes up incomplete and the container dies with something
 # thoroughly unhelpful:
 #
-#   crun: open `.../merged/run/.containerenv`: No such file or directory:
+#   crun: open '.../merged/run/.containerenv': No such file or directory:
 #   OCI runtime attempted to invoke a command that was not found
 #
 # The image still LISTS fine in that state, because its metadata is readable —

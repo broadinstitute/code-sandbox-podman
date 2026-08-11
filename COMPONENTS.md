@@ -1,6 +1,7 @@
 # What is in the image, and the services around it
 
 - [The image](#the-image)
+- [In-container root: works locally, not on a shared store](#in-container-root-works-locally-not-on-a-shared-store)
 - [fiss-mcp (Terra) — runs on the host](#fiss-mcp-terra-runs-on-the-host)
 - [CodeGraph MCP — runs in the container](#codegraph-mcp-runs-in-the-container)
 - [Headroom proxy](#headroom-proxy)
@@ -25,10 +26,57 @@ build hang and then fail.
 - **CodeGraph** — `codegraph` at `/usr/local/bin`, pinned via `CODEGRAPH_VERSION`.
   Self-contained bundle with its own Node runtime.
 - **Dev tooling** — `git`, `curl`, `ripgrep`, `vim`, `jq`, `build-essential`.
-- **Passwordless `sudo`** for the container's `claude` user (uid 1015). This grants
-  root *in the container's user namespace only*; that uid maps to the invoker's
-  subuid range on the host, so it confers nothing outside. See
+- **Passwordless `sudo`** for the container's `claude` user (uid 1015) — on a
+  standalone local install. It grants root *in the container's user namespace
+  only*; that uid maps to the invoker's subuid range on the host, so it confers
+  nothing outside. See
   [the isolation FAQ](FAQ.md#can-an-agent-reach-another-users-sandbox-on-a-shared-host).
+  On a shared image store it does not work at all — next section.
+
+### In-container root: works locally, not on a shared store
+
+Measured on both, with the same image:
+
+| | standalone local store | shared read-only store |
+|---|---|---|
+| owner of `/usr/bin/sudo` as seen inside | `0`, mode `4755` | `65534` (nobody) |
+| `sudo -n id -u` | `0` | refuses to run |
+
+The shared store is populated by **rootful** podman, so its files are owned by
+*real* uid 0 on disk. A rootless consumer's user namespace does not map host uid 0
+at all — `--userns=keep-id:uid=1015` maps only the invoker's own uid plus subuid
+ranges — so root-owned image files appear as `65534`, and a setuid binary owned by
+an unmapped uid cannot confer root. sudo notices and refuses:
+
+```
+sudo: /etc/sudo.conf is owned by uid 65534, should be 0
+sudo: /usr/bin/sudo must be owned by uid 0 and have the setuid bit set
+```
+
+This is the same root cause as the `mount_program` requirement, and the same
+trade-off seen from the other side. Normally rootless podman *chowns* image layers
+into the consumer's namespace on first use, which is exactly what fails on a
+read-only store (`error during chown: remove usr/bin/bzcat: permission denied`).
+`fuse-overlayfs` lets the image run without that chown — at the cost of uid
+fidelity for files owned by uids outside the map.
+
+**What still works:** everything the sandbox actually does. Nothing in
+`start_script.sh` or any hook needs root (`service postfix start` is already
+tolerated to fail), and `claude`, the MCP servers, `uv pip install --python
+/opt/claude-venv/...`, `cargo install` and all file work under `/workspace` are
+unaffected.
+
+**What is lost:** `sudo apt install` inside a shared-server sandbox. To add system
+packages there, an admin bakes them into the image and rebuilds — which is the
+right place for it anyway, since every user then gets the same environment.
+
+**Read it as a security gain as well as a capability loss.** On the shared server
+the agent cannot become root even inside its own namespace, so the
+passwordless-sudo line in the Dockerfile is inert there.
+
+If a user genuinely needs in-container root, the only way to get it is their own
+per-user image store — an 8.3 GB copy each, and they would then be running an
+image nobody else can verify. Not recommended.
 
 ### No pip, anywhere
 

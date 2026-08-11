@@ -14,8 +14,9 @@ cloud CLIs, no tokens. **The agent can commit; only you can push.** That is
 enforced by there being nothing to authenticate with, not by policy.
 
 The image is a batteries-included dev environment (Python via uv, Rust, Java 17,
-Node) so `uv pip install`, `cargo install` and `sudo apt install` work inside
-without a slow first launch.
+Node) so `uv pip install` and `cargo install` work inside without a slow first
+launch. (`sudo apt install` works on a standalone local install but **not** on the
+shared server — see [in-container root](COMPONENTS.md#in-container-root-works-locally-not-on-a-shared-store).)
 
 > A fork of [jonn-smith/claude-docker-sandbox](https://github.com/jonn-smith/claude-docker-sandbox),
 > which is Docker-based. This fork is **podman-only** — see [Scope](#scope), and
@@ -280,8 +281,12 @@ claim is verified by probe in
   grep+Read chains. Auto-indexes per workdir.
 - **[Headroom](https://github.com/chopratejas/headroom)** prompt-compression proxy,
   off by default.
-- **[caveman](https://github.com/JuliusBrussee/caveman)** compression plugin,
-  vendored so a fresh clone needs no network round-trip.
+- **Two skill plugins, vendored** so a fresh clone needs no network round-trip and
+  every user of a shared image runs identical versions:
+  [caveman](https://github.com/JuliusBrussee/caveman) (prompt compression) and
+  [ponytail](https://github.com/DietrichGebert/ponytail) (writes less code for the
+  same result). Both on by default, both pinned by commit SHA and re-checked at
+  container boot — see [PLUGIN_PINS.md](claude-sandbox-shared/.claude/PLUGIN_PINS.md).
 - **Email notification** for prompts that outlive a threshold (default 120 s),
   off unless `CLAUDE_NOTIFY_EMAIL` is set.
 - **Resource ceilings** — `--memory`, `--cpus`, `--shm-size`, enforced through

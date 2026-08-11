@@ -214,7 +214,7 @@ repeat it, so the two cannot drift apart.
 
 Note: you do NOT build the container image. An admin builds it once into a shared
 read-only store (scripts/build-shared-image.sh), so every user provably runs the
-same image, and `make` is deliberately absent from the host.
+same image, and 'make' is deliberately absent from the host.
 
 No log-out/log-in is needed: rootless podman uses no docker group.
 EOF

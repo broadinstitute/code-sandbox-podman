@@ -111,6 +111,28 @@ version, and the launcher sets `DISABLE_AUTOUPDATER=1`. To move versions, bump
 that variable and rebuild — an in-place self-update would make the image
 non-reproducible and would be lost on the next container exit anyway.
 
+### `sudo` fails inside the container on the shared server
+
+```
+sudo: /etc/sudo.conf is owned by uid 65534, should be 0
+sudo: /usr/bin/sudo must be owned by uid 0 and have the setuid bit set
+```
+
+Expected on a shared image store, and not fixable there. The store is built by
+rootful podman, so its files are owned by *real* uid 0, which a rootless
+consumer's namespace does not map — they appear as `65534`, and a setuid binary
+owned by an unmapped uid cannot confer root.
+
+Nothing the sandbox does needs root, so `claude`, the MCP servers, `uv pip
+install`, `cargo install` and all work under `/workspace` are unaffected. What you
+lose is `sudo apt install` inside the container: to add system packages on a shared
+host, an admin bakes them into the image and rebuilds. Full explanation and the
+measurements in
+[COMPONENTS.md](COMPONENTS.md#in-container-root-works-locally-not-on-a-shared-store).
+
+It works normally on a standalone local install, where the store is yours and the
+uids line up.
+
 ### `gosu: initgroups(claude): Operation not permitted`
 
 Historical; fixed. If it reappears you are running an old image. Under
