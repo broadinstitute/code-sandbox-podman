@@ -95,22 +95,43 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /usr/local/bin/
 # one Python version across host and container is one less thing to reason about.
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python \
     CLAUDE_VENV_PYTHON=3.12
-# anndata is baked; scanpy, scvi-tools and the rest are not. The dividing line is
-# whether the dependency closure is cheap and shared:
+# anndata and scanpy are baked; scvi-tools is not. The dividing line is whether the
+# dependency closure is cheap and wanted by everyone. Measured with
+# `uv pip install --dry-run`, which resolves without downloading:
 #
-#   anndata      ~15 MB with h5py, needed to open a .h5ad at all, and every
-#                single-cell task starts by doing that. Baking it means an agent can
-#                inspect data in its first turn instead of installing first.
-#   scvi-tools   109 packages, pulling torch plus the whole nvidia-cu13 CUDA stack
-#                (measured with `uv pip install --dry-run`) -- several GB, and only
-#                some projects want it, at versions that should be pinned per project.
+#   anndata      ~15 MB with h5py. Every single-cell task starts by opening an
+#                .h5ad, so baking it lets an agent inspect data in its first turn.
+#   scanpy       48 packages against a bare venv, but most of them (numpy, pandas,
+#                scikit-learn, matplotlib) are already here; the real additions are
+#                numba, llvmlite, umap-learn and pynndescent. Universal enough for
+#                this deployment's work to be worth the space. Installed as
+#                scanpy[leiden] rather than bare scanpy: without that extra,
+#                sc.tl.leiden raises "Please install the igraph package" the first
+#                time anyone clusters, and igraph + leidenalg are only a few MB. A
+#                scanpy that cannot cluster is not worth baking.
+#   scvi-tools   109 packages, 15 of them nvidia-* CUDA wheels, several GB. Only
+#                some projects want it, the version should be pinned per project,
+#                and neither the shared VM nor most laptops here have a GPU -- so
+#                it belongs in a per-project venv, installed with
+#                `--torch-backend cpu` (90 packages, no CUDA). Worked example in
+#                the README.
 #
-# So: cheap and universal goes in the image, heavy and project-specific goes in a
-# per-project venv under /workspace. See "Installing packages" in CONFIG.md.
+# Cheap and universal goes in the image; heavy and project-specific goes in a venv
+# under /workspace. See "Installing packages" in CONFIG.md.
+# The `numba<0.67` cap keeps a PRERELEASE out of the image, and it is load-bearing.
+# Unconstrained, this set resolves to numpy 2.5.2 + numba 0.67.0rc1, because stable
+# numba requires numpy < 2.5 and uv will reach for a prerelease when nothing stable
+# fits. A release-candidate JIT compiler under everyone's numerics is a poor default
+# for a shared image, so the cap trades numpy 2.5.2 for 2.4.6 and keeps numba on
+# 0.66.0. scanpy stays current at 1.12.3 either way.
+#
+# `--prerelease=disallow` looks like the tidier way to say this and is NOT: measured,
+# it holds numpy at 2.5.2 and instead backtracks scanpy to 1.9.8 and numba to 0.53.1
+# (2021), which is far worse than the problem. Cap the one package that causes it.
 RUN uv venv --python "${CLAUDE_VENV_PYTHON}" /opt/claude-venv && \
     uv pip install --python /opt/claude-venv/bin/python --no-cache \
       numpy pandas matplotlib scipy scikit-learn seaborn \
-      ipython jupyter requests anndata \
+      ipython jupyter requests anndata "scanpy[leiden]" "numba<0.67" \
       "headroom-ai[proxy]==0.24.0" && \
     chown -R claude:claude /opt/claude-venv /opt/uv-python
 

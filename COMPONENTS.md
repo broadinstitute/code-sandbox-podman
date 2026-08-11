@@ -10,7 +10,7 @@
 
 ## The image
 
-Base `docker.io/library/node:22-slim`, ~8.4 GB built. Fully qualified base image
+Base `docker.io/library/node:22-slim`, ~9.0 GB built. Fully qualified base image
 names are required: podman on RHEL-family hosts sets
 `short-name-mode="enforcing"`, so a bare `node:22-slim` makes a non-interactive
 build hang and then fail.
@@ -20,7 +20,8 @@ build hang and then fail.
   version, and a self-update would be lost at container exit anyway.
 - **Python** — venv at `/opt/claude-venv`, on `PATH`, preloaded with `numpy`,
   `pandas`, `matplotlib`, `scipy`, `scikit-learn`, `seaborn`, `ipython`,
-  `jupyter`, `requests`, `anndata` (with `h5py`), `headroom-ai[proxy]`.
+  `jupyter`, `requests`, `anndata` (with `h5py`), `scanpy[leiden]`
+  (so `sc.tl.leiden` works out of the box), `headroom-ai[proxy]`.
   Heavier, project-specific stacks belong in a per-project venv instead — see
   [Installing packages](CONFIG.md#installing-packages).
 - **Rust** — stable toolchain at `/usr/local/{cargo,rustup}`.
@@ -77,7 +78,7 @@ the agent cannot become root even inside its own namespace, so the
 passwordless-sudo line in the Dockerfile is inert there.
 
 If a user genuinely needs in-container root, the only way to get it is their own
-per-user image store — an 8.4 GB copy each, and they would then be running an
+per-user image store — an 9.0 GB copy each, and they would then be running an
 image nobody else can verify. Not recommended.
 
 ### No pip, anywhere

@@ -260,11 +260,21 @@ where a package should go. Three options, in the order you should reach for them
 ### What is already there
 
 `/opt/claude-venv` is on `PATH` as `python`, with `numpy`, `pandas`, `scipy`,
-`scikit-learn`, `matplotlib`, `seaborn`, `ipython`, `jupyter`, `requests` and
-**`anndata`** (plus `h5py`, which comes with it). So an agent can open an `.h5ad`
-in its first turn without installing anything.
+`scikit-learn`, `matplotlib`, `seaborn`, `ipython`, `jupyter`, `requests`,
+**`anndata`** (plus `h5py`) and **`scanpy[leiden]`** (plus `igraph`, `leidenalg`,
+`numba`, `umap-learn`). Verified end to end in the image: normalize → log1p → PCA →
+neighbors → leiden → UMAP, with no installing at all.
 
 There is **no pip**, on the host or in the container — all Python is uv-managed.
+
+One pin worth knowing about: `numba<0.67`. Left unconstrained this set resolves to
+numpy 2.5.2 with **numba 0.67.0rc1**, because stable numba requires numpy < 2.5 and
+uv reaches for a prerelease when nothing stable fits. A release-candidate JIT under
+everyone's numerics is a poor default, so the image takes numpy 2.4.6 and numba
+0.66.0 instead; scanpy is 1.12.3 either way. (`--prerelease=disallow` is *not* the
+tidier fix — measured, it keeps numpy 2.5.2 and instead drags scanpy back to 1.9.8
+and numba to 0.53.1.) If a project needs numpy ≥ 2.5, put it in a project venv,
+where that decision is local.
 
 ### 1. A per-project venv under `/workspace` — the durable option
 
@@ -273,15 +283,21 @@ survives container exit and is visible to you on the host:
 
 ```bash
 cd /workspace/your-project
-export UV_CACHE_DIR=/workspace/.uv-cache   # so re-installs do not re-download
+export UV_CACHE_DIR=/workspace/.uv-cache      # so re-installs do not re-download
 uv venv .venv
-uv pip install scvi-tools                  # or -r requirements.txt / -e .
-.venv/bin/python -c 'import scvi'
+uv pip install --torch-backend cpu scvi-tools # or -r requirements.txt / -e .
+.venv/bin/python -c 'import scvi; print(scvi.__version__)'
 ```
 
-Verified: an `anndata` install this way came back intact in a fresh container, and
-the venv lands owned by you on the host (293 MB for anndata alone, plus an 8 MB
-cache). Add `.venv/` and `.uv-cache/` to the project's `.gitignore`.
+Measured: `scvi-tools` this way took **39 s**, produced a **1.6 GB** venv and a
+1.5 GB cache, landed `torch 2.13.0+cpu`, and imported fine from a fresh container.
+The venv is owned by you on the host. Add `.venv/` and `.uv-cache/` to the
+project's `.gitignore`.
+
+**`--torch-backend cpu` matters on this deployment.** The default resolution pulls
+109 packages including 15 `nvidia-*` CUDA wheels — several GB for hardware the
+shared VM does not have. With the flag: 90 packages, zero CUDA wheels. uv also
+accepts `cu126`, `cu130` and `auto` if you do have a GPU.
 
 `uv` picks up `.venv` in the current directory automatically, which is why
 `uv pip install` needs no `--python` here.
@@ -312,7 +328,8 @@ whether the dependency closure is cheap **and** shared by everyone:
 | | dependency closure | verdict |
 |---|---|---|
 | `anndata` | ~15 MB with `h5py` | **baked** — every single-cell task starts by opening an `.h5ad` |
-| `scvi-tools` | **109 packages**, including `torch` and the whole `nvidia-cu13` CUDA stack | not baked — several GB, wanted by some projects, and the version should be pinned per project |
+| `scanpy[leiden]` | 48 packages against a bare venv, but most were already present; the real additions are `numba`, `llvmlite`, `umap-learn`, `pynndescent`, `igraph`, `leidenalg` | **baked** — ~0.5 GB of image, and it covers most day-to-day work. Installed with the `leiden` extra because bare `scanpy` raises *"Please install the igraph package"* the first time anyone clusters |
+| `scvi-tools` | **109 packages**, 15 of them `nvidia-*` CUDA wheels | not baked — several GB, wanted by some projects, version should be pinned per project, and no GPU here to use it |
 
 Those counts are measured with `uv pip install --dry-run scvi-tools`, which resolves
 without downloading — worth running before adding anything to the image.

@@ -68,7 +68,7 @@ source env.main.sh
 # 2. Check the host and build the host-side fiss-mcp venv. Installs nothing.
 ./setup_host.sh
 
-# 3. Build the image. Takes ~36 minutes and ~8.4 GB the first time.
+# 3. Build the image. Takes ~36 minutes and ~9.0 GB the first time.
 cd docker && make && cd ..
 
 # 4. Launch.
@@ -261,6 +261,41 @@ git clone https://github.com/your-org/your-repo
 You push from the host side at
 `/mnt/sandbox/users/$USER/workspace/<repo>`; see
 [how pushing works](CONFIG.md#read-write-project-mounts-and-how-pushing-works).
+
+### Installing packages: scvi-tools, worked example
+
+The image already has `numpy`, `pandas`, `scipy`, `scikit-learn`, `matplotlib`,
+`seaborn`, `ipython`, `jupyter`, `anndata` and **`scanpy`** (with `igraph` and
+`leidenalg`, so clustering works), which covers a lot of single-cell work with no
+installing at all.
+
+Heavier, project-specific stacks go in a **venv under `/workspace`**, which is a
+bind mount and therefore survives container exit — anything installed elsewhere in
+the container is gone when it stops. `scvi-tools` is the case worth spelling out:
+
+```bash
+# inside the sandbox
+cd /workspace/your-project
+export UV_CACHE_DIR=/workspace/.uv-cache      # so re-installs do not re-download
+uv venv .venv
+uv pip install --torch-backend cpu scvi-tools
+.venv/bin/python -c 'import scvi; print(scvi.__version__)'
+```
+
+Measured on this deployment: **39 seconds**, a **1.6 GB** venv, and `torch
+2.13.0+cpu`. It survives into a fresh container, and `.venv` ends up owned by you on
+the host.
+
+**`--torch-backend cpu` is the part not to skip.** Without it you get 109 packages
+including 15 `nvidia-*` CUDA wheels — several GB per user, for hardware neither the
+shared VM nor most laptops here have. With it: 90 packages, **zero** CUDA wheels.
+
+Add `.venv/` and `.uv-cache/` to the project's `.gitignore`. Pin what you install in
+the project's own `pyproject.toml` or `requirements.txt` — the point of a per-project
+venv is that two projects can disagree about versions.
+
+Full detail, including why `sudo apt install` is not an option on the shared server,
+is in [CONFIG.md](CONFIG.md#installing-packages).
 
 ---
 
