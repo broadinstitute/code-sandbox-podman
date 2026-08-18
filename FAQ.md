@@ -111,6 +111,53 @@ version, and the launcher sets `DISABLE_AUTOUPDATER=1`. To move versions, bump
 that variable and rebuild — an in-place self-update would make the image
 non-reproducible and would be lost on the next container exit anyway.
 
+### I have to log in to Claude every time
+
+You should log in **once per state directory**, not once per launch. The token is
+written to `.credentials.json` inside whichever `.claude` the launcher mounts:
+
+| layout | token path |
+|---|---|
+| shared (`CLAUDE_SANDBOX_USE_SHARED=1`, every template) | `$CLAUDE_SANDBOX_SHARED/.claude/.credentials.json` |
+| per-instance | `$CLAUDE_SANDBOX_HOME/.claude/.credentials.json` |
+
+In shared mode every instance on the host reads the same file, so a second or third
+sandbox does **not** mean a second login. On the shared VM that path is under
+`users/$USER/shared/`, which lives on the data disk and therefore survives VM
+rebuilds too.
+
+**If it really is every launch, the token cannot be written back.** Claude Code
+*refreshes* the credential in place — measured: after one `claude -p` call the file's
+mtime and contents both changed. A read-only or wrong-owner file authenticates once
+and then cannot be updated, and the next launch prompts again. Check:
+
+```bash
+source /mnt/sandbox/users/$USER/env.$USER.sh
+ls -l "$CLAUDE_SANDBOX_SHARED/.claude/.credentials.json"
+# mode must be 600 and owner must be YOU; mtime should move after each session
+```
+
+If the mtime never advances, fix the ownership rather than logging in again:
+
+```bash
+chown "$USER:$USER" "$CLAUDE_SANDBOX_SHARED/.claude/.credentials.json"
+chmod 600 "$CLAUDE_SANDBOX_SHARED/.claude/.credentials.json"
+```
+
+**To skip the login on a new account or a fresh instance of your own**, copy the
+token in — verified to work, with no prompt:
+
+```bash
+install -m 600 -o "$NEW" -g "$NEW" \
+  /mnt/sandbox/users/$USER/shared/.claude/.credentials.json \
+  /mnt/sandbox/users/$NEW/shared/.claude/.credentials.json
+```
+
+**Only do that between accounts belonging to you.** That file *is* your Claude
+identity: whoever holds it can use your subscription, and usage is attributed to
+you. Other people should run their own `/login` — which is also why the per-user
+directories are `700`.
+
 ### `sudo` fails inside the container on the shared server
 
 ```

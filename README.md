@@ -241,6 +241,11 @@ The token goes to your own state dir, so later launches start straight into a
 session; the host's `~/.claude` is never mounted. `/login` still works if you ever
 need to re-authenticate or switch accounts.
 
+It is **once per account, not once per launch**, and in shared mode every instance on
+the host reuses the same token. Where it lives, and how to carry one to another
+account of your own instead of logging in again, is in
+[the FAQ](FAQ.md#i-have-to-log-in-to-claude-every-time).
+
 ```bash
 cd /mnt/sandbox/repo
 source /mnt/sandbox/users/$USER/env.$USER.sh
