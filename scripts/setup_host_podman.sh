@@ -147,9 +147,30 @@ declare -a WANTED=()
 [[ -n "${CLAUDE_SANDBOX_CONTEXT_DIR:-}"  ]] && WANTED+=("${CLAUDE_SANDBOX_CONTEXT_DIR}")
 [[ -n "${CLAUDE_SANDBOX_HOME:-}"         ]] && WANTED+=("${CLAUDE_SANDBOX_HOME}")
 
-USER_ENV_FILE="${CLAUDE_SANDBOX_ROOT:-/mnt/sandbox}/users/${USER}/env.${USER}.sh"
+SANDBOX_ROOT_GUESS="${CLAUDE_SANDBOX_ROOT:-/mnt/sandbox}"
+USER_ENV_FILE="${SANDBOX_ROOT_GUESS}/users/${USER}/env.${USER}.sh"
 
-if (( ${#WANTED[@]} == 0 )) && [[ -f "$USER_ENV_FILE" ]]; then
+if (( ${#WANTED[@]} == 0 )) && [[ ! -f "$USER_ENV_FILE" && -d "${SANDBOX_ROOT_GUESS}/users" ]]; then
+  # Shared host, but this user has no env file at all: step 1 has not been run.
+  # Do not just warn. Pasting the step-4 block into a shell runs `./setup_host.sh`
+  # even after `source` fails ("No such file or directory") because a failed source
+  # does not abort an interactive shell, so the run continues and dies further down
+  # in fiss-mcp with a git ownership error that says nothing about the real problem.
+  fatal "you have not been provisioned yet — step 1 has not run."
+  echo "          There is no env file at:"
+  echo "            ${USER_ENV_FILE}"
+  echo
+  echo "          Run step 1 first, then step 4 (all in the same shell):"
+  echo
+  echo "            cd ${REPO_ROOT}"
+  echo "            ./scripts/provision-sandbox-user.sh"
+  echo "            source ${USER_ENV_FILE}"
+  echo "            ./setup_host.sh"
+  echo
+  echo "          Step 1 creates your directories, clones warp and warp-tools, and"
+  echo "          writes that env file. It needs no root and touches nothing of"
+  echo "          anyone else's."
+elif (( ${#WANTED[@]} == 0 )) && [[ -f "$USER_ENV_FILE" ]]; then
   # A provisioned per-user env file exists but was not sourced. This used to be a
   # warning that then let the run continue, which was worse than useless: the very
   # next step (fiss-mcp) reads CLAUDE_SANDBOX_FISS_ROOT from that same file, and

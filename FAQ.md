@@ -364,12 +364,22 @@ problem is on the mount or permission side.
 fatal: detected dubious ownership in repository at '/mnt/sandbox/repo/host_fiss_mcp/fiss-mcp'
 ```
 
-**One cause, two symptoms: the env file was not sourced.** Step 4 is three commands
-that have to run in the same shell —
+**The env file was not in effect.** Either you skipped sourcing it, or — look one
+line further up — it does not exist yet:
+
+```
+bash: /mnt/sandbox/users/<you>/env.<you>.sh: No such file or directory
+```
+
+That means **step 1 never ran**, and step 1 is what writes that file. Note what
+happened next in that transcript: `source` failed, and `./setup_host.sh` ran anyway.
+A failed `source` does not abort an interactive shell, so pasting the step-4 block
+carries on into a half-configured run. Start from step 1:
 
 ```bash
 cd /mnt/sandbox/repo
-source /mnt/sandbox/users/$USER/env.$USER.sh
+./scripts/provision-sandbox-user.sh          # step 1 — writes the env file
+source /mnt/sandbox/users/$USER/env.$USER.sh # step 4, same shell
 ./setup_host.sh
 ```
 
@@ -379,15 +389,18 @@ tries to `git fetch` in a clone owned by whoever set the host up, and git refuse
 correctly, since that clone is shared. The directory warning just above it is the
 same missing variables showing up a step earlier.
 
-Nothing is broken and nothing needs cleaning up: re-run all three commands together.
+Nothing is broken and nothing needs cleaning up: re-run from whichever step you
+missed.
 
 Do **not** "fix" it with the `git config --global --add safe.directory` line git
 suggests. That would let you mutate the admin's clone, which other users depend on;
 the point is to use your own.
 
-Newer versions catch this: `setup_host.sh` now stops with the exact three commands
-rather than warning and continuing, and `install.sh` refuses a state directory it
-does not own. Seeing the raw git error means the checkout predates that.
+Newer versions catch both variants before they reach git. `setup_host.sh` stops and
+names the missing step -- "you have not been provisioned yet" when there is no env
+file, "exists but has not been sourced" when there is -- and `install.sh` refuses a
+state directory it does not own. Seeing the raw git error means the checkout predates
+that, so `git pull` in the shared repo is worth doing.
 
 ### `make: command not found`
 
