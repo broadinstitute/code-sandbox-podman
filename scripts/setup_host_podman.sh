@@ -147,7 +147,28 @@ declare -a WANTED=()
 [[ -n "${CLAUDE_SANDBOX_CONTEXT_DIR:-}"  ]] && WANTED+=("${CLAUDE_SANDBOX_CONTEXT_DIR}")
 [[ -n "${CLAUDE_SANDBOX_HOME:-}"         ]] && WANTED+=("${CLAUDE_SANDBOX_HOME}")
 
-if (( ${#WANTED[@]} == 0 )); then
+USER_ENV_FILE="${CLAUDE_SANDBOX_ROOT:-/mnt/sandbox}/users/${USER}/env.${USER}.sh"
+
+if (( ${#WANTED[@]} == 0 )) && [[ -f "$USER_ENV_FILE" ]]; then
+  # A provisioned per-user env file exists but was not sourced. This used to be a
+  # warning that then let the run continue, which was worse than useless: the very
+  # next step (fiss-mcp) reads CLAUDE_SANDBOX_FISS_ROOT from that same file, and
+  # without it the installer falls back to the SHARED checkout and dies with
+  #     fatal: detected dubious ownership in repository at
+  #            '<repo>/host_fiss_mcp/fiss-mcp'
+  # because that clone belongs to whoever set the host up. One unsourced file, two
+  # confusing failures, neither of which names the cause. So: stop here.
+  fatal "your env file exists but has not been sourced into this shell."
+  echo "          Run all three commands together (step 4 in the README):"
+  echo
+  echo "            cd ${REPO_ROOT}"
+  echo "            source ${USER_ENV_FILE}"
+  echo "            ./setup_host.sh"
+  echo
+  echo "          Sourcing it is what sets CLAUDE_SANDBOX_PROJECTS_DIR,"
+  echo "          CLAUDE_SANDBOX_HOME and CLAUDE_SANDBOX_FISS_ROOT. Without them"
+  echo "          this script cannot tell your directories from anyone else's."
+elif (( ${#WANTED[@]} == 0 )); then
   warn "no CLAUDE_SANDBOX_{PROJECTS_DIR,CONTEXT_DIR,HOME} in the environment."
   warn "Nothing to create. Source your env.<INSTANCE>.sh first if you want"
   warn "this step to provision the sandbox directories."

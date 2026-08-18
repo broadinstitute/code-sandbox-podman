@@ -355,6 +355,40 @@ gcloud compute disks describe sandbox-data --zone "$ZONE" \
 `status: READY` with the instance under `users` means the data is intact and the
 problem is on the mount or permission side.
 
+### Step 4 fails: `dubious ownership` in `host_fiss_mcp/fiss-mcp`
+
+```
+=== sandbox directory layout ===
+  warn    no CLAUDE_SANDBOX_{PROJECTS_DIR,CONTEXT_DIR,HOME} in the environment.
+...
+fatal: detected dubious ownership in repository at '/mnt/sandbox/repo/host_fiss_mcp/fiss-mcp'
+```
+
+**One cause, two symptoms: the env file was not sourced.** Step 4 is three commands
+that have to run in the same shell —
+
+```bash
+cd /mnt/sandbox/repo
+source /mnt/sandbox/users/$USER/env.$USER.sh
+./setup_host.sh
+```
+
+Sourcing is what sets `CLAUDE_SANDBOX_FISS_ROOT` to your own
+`users/$USER/fiss-mcp`. Without it the installer falls back to the shared checkout,
+tries to `git fetch` in a clone owned by whoever set the host up, and git refuses —
+correctly, since that clone is shared. The directory warning just above it is the
+same missing variables showing up a step earlier.
+
+Nothing is broken and nothing needs cleaning up: re-run all three commands together.
+
+Do **not** "fix" it with the `git config --global --add safe.directory` line git
+suggests. That would let you mutate the admin's clone, which other users depend on;
+the point is to use your own.
+
+Newer versions catch this: `setup_host.sh` now stops with the exact three commands
+rather than warning and continuing, and `install.sh` refuses a state directory it
+does not own. Seeing the raw git error means the checkout predates that.
+
 ### `make: command not found`
 
 Correct, and not a missing dependency. Users do not build the image on a shared

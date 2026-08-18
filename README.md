@@ -227,6 +227,11 @@ source /mnt/sandbox/users/$USER/env.$USER.sh
 ./setup_host.sh
 ```
 
+**All three in the same shell.** Sourcing your env file is what tells the installer
+which directories are yours. Skip it and it aims at the shared checkout instead, then
+[fails on an admin-owned git clone](FAQ.md#step-4-fails-dubious-ownership-in-host_fiss_mcpfiss-mcp).
+`setup_host.sh` now stops and reprints these exact commands if you get it wrong.
+
 **5. Launch.** Claude Code authenticates itself on the first run — you do not need
 to type `/login`. It shows a login-method picker: choose the **first option**
 (Claude account with subscription), and it prints a URL and a code. Open the URL on

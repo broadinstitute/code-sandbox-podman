@@ -26,6 +26,38 @@ mkdir -p "$STATE_ROOT"
 
 SRC_DIR="${STATE_ROOT}/fiss-mcp"
 VENV_DIR="${STATE_ROOT}/venv"
+
+# Refuse to put per-user state in a directory belonging to someone else. On a
+# shared host, STATE_ROOT falling back to SRC_ROOT means writing into the admin's
+# checkout, and the failure it produces names neither the cause nor the fix:
+#
+#   fatal: detected dubious ownership in repository at
+#          '/mnt/sandbox/repo/host_fiss_mcp/fiss-mcp'
+#
+# That is git refusing to touch the admin's clone -- correctly. Even if permissions
+# allowed it, `git fetch`/`checkout` below would be mutating a clone other users
+# share. Catching it here turns a confusing git error into an instruction.
+if [[ -e "$STATE_ROOT" ]]; then
+    _owner_uid="$(stat -c %u "$STATE_ROOT" 2>/dev/null || echo "")"
+    if [[ -n "$_owner_uid" && "$_owner_uid" != "$(id -u)" ]]; then
+        _owner_name="$(stat -c %U "$STATE_ROOT" 2>/dev/null || echo "uid ${_owner_uid}")"
+        echo "host_fiss_mcp: refusing to install into a directory owned by ${_owner_name}:" >&2
+        echo "                 ${STATE_ROOT}" >&2
+        echo "" >&2
+        if [[ -z "${CLAUDE_SANDBOX_FISS_ROOT:-}" ]]; then
+            _guess="${CLAUDE_SANDBOX_ROOT:-/mnt/sandbox}/users/${USER}/env.${USER}.sh"
+            echo "  CLAUDE_SANDBOX_FISS_ROOT is unset, so this defaulted to the shared" >&2
+            echo "  checkout. Your env file sets it -- source it first:" >&2
+            echo "" >&2
+            echo "    source ${_guess}" >&2
+            echo "    ./setup_host.sh" >&2
+        else
+            echo "  CLAUDE_SANDBOX_FISS_ROOT points at a directory you do not own." >&2
+            echo "  Point it somewhere in your own tree." >&2
+        fi
+        exit 1
+    fi
+fi
 REPO_URL="https://github.com/broadinstitute/fiss-mcp.git"
 
 # Pinned release. Bump together with anything that depends on new fiss-mcp
