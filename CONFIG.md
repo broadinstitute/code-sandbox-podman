@@ -14,6 +14,7 @@ before launching. Templates: `env.podman.example.sh` (local),
 - [Read-write project mounts, and how pushing works](#read-write-project-mounts-and-how-pushing-works)
 - [Getting files into the sandbox](#getting-files-into-the-sandbox)
   - [Uploading through the Cloud Console](#uploading-through-the-cloud-console-no-terminal-setup)
+  - [Getting agent output back out, and sharing it](#getting-agent-output-back-out-and-sharing-it)
 - [Installing packages](#installing-packages)
 - [Persistence](#persistence)
 - [Customizing the image](#customizing-the-image)
@@ -264,7 +265,7 @@ have to configure anything. Nothing needs to go inside a repo.
 | `$CLAUDE_SANDBOX_PROJECTS_DIR/` (`users/$USER/workspace/`) | `/workspace/<name>` | **yes** | loose files to work on — notes, scratch scripts, data. Sits *next to* the repos, not in them |
 | `$CLAUDE_SANDBOX_CONTEXT_DIR/` (`users/$USER/context/`) | `/context/<name>` | **no** — `:ro` | plans, specs, standards, a data dictionary. Anything you do not want rewritten |
 | `CLAUDE_SANDBOX_RO_MOUNTS` | `/read-only-reference/<name>` | no | reference datasets living elsewhere on the host, shared between users |
-| `CLAUDE_SANDBOX_RW_MOUNTS` | `/projects/<name>` | yes | a checkout that must live outside your workspace |
+| `CLAUDE_SANDBOX_RW_MOUNTS` | `/projects/<name>` | yes | a checkout that must live outside your workspace, or a **shared** dir for handing agent output to other users |
 
 The first two need **no configuration at all** — both are already mounted, so
 dropping a file in is the whole operation:
@@ -372,6 +373,29 @@ mkdir -p /mnt/sandbox/users/$USER/context
 sed -i "s|^export CLAUDE_SANDBOX_CONTEXT_DIR=.*|export CLAUDE_SANDBOX_CONTEXT_DIR=/mnt/sandbox/users/$USER/context|" \
   /mnt/sandbox/users/$USER/env.$USER.sh
 ```
+
+### Getting agent output back out, and sharing it
+
+Files the agent writes under `/workspace` are yours on the host immediately — same
+inode, owned by you, no export step. That covers most cases.
+
+**Plans are the exception worth knowing about.** When the agent writes a plan of its
+own accord it goes to `~/.claude/plans` inside the container, which is
+`$CLAUDE_SANDBOX_SHARED/.claude/plans/` on the host. On a shared server that is inside
+your `chmod 700` tree, so it is private to you — `$SHARED_HOME` means shared between
+*your* instances, not between people.
+
+To hand a plan to someone else, either:
+
+- **commit it** into the repo it concerns and push, which gets review and history; or
+- **write it to a shared directory** — ask an admin for
+  [`/mnt/sandbox/plans`](SERVER.md#sharing-agent-output-between-users), which arrives
+  in every sandbox at `/projects/plans`, read-write.
+
+With that mount in place, tell the agent the path explicitly
+(`/projects/plans/2026-08-11-migration.md`); left to itself it uses the private
+location. Measured: the container's umask is `0022`, so what it writes there is `644`
+and owned by you — colleagues can read it, and cannot overwrite it.
 
 ## Installing packages
 

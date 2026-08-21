@@ -320,6 +320,30 @@ if [[ -d "$REFERENCE_DIR" ]]; then
     fi
 fi
 
+# A shared, WRITABLE directory for handing work between users -- plans, findings,
+# a scratch report. Everything else a user owns is chmod 700, and the plans the agent
+# writes by itself land in ~/.claude/plans inside their own state dir, so without
+# this there is no path from one person's agent to another person's eyes.
+#
+# Same existence gate as the reference dir, and for the same reason: the launcher
+# treats a missing CLAUDE_SANDBOX_RW_MOUNTS path as fatal.
+PLANS_DIR="${SANDBOX_ROOT}/plans"
+if [[ -d "$PLANS_DIR" ]]; then
+    if grep -q "^export CLAUDE_SANDBOX_RW_MOUNTS=" "$ENV_FILE"; then
+        ok "you already set CLAUDE_SANDBOX_RW_MOUNTS — left alone"
+    else
+        if grep -q "^#export CLAUDE_SANDBOX_RW_MOUNTS=" "$ENV_FILE"; then
+            sed -i "s|^#export CLAUDE_SANDBOX_RW_MOUNTS=.*|export CLAUDE_SANDBOX_RW_MOUNTS=\"${PLANS_DIR}\"|" \
+                "$ENV_FILE"
+        else
+            printf '\nexport CLAUDE_SANDBOX_RW_MOUNTS="%s"\n' "$PLANS_DIR" >> "$ENV_FILE"
+        fi
+        ok "shared plans dir found; mounted read-write at /projects/plans"
+        ok "  tell the agent to write there for anything colleagues should see;"
+        ok "  its own plans go to ~/.claude/plans, which is private to you"
+    fi
+fi
+
 # ------------------------------------------------------------- staleness ----
 echo
 echo "=== checkout freshness ==="

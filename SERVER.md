@@ -31,6 +31,7 @@ NETWORK=default          # see the note under "Create the instance"
 - [Updating the image later](#updating-the-image-later)
 - [Adding a user](#adding-a-user)
 - [Sharing reference docs with everyone](#sharing-reference-docs-with-everyone)
+- [Sharing agent output between users](#sharing-agent-output-between-users)
 - [Attaching a GPU](#attaching-a-gpu)
 - [Capacity, not disk, is the real limit](#capacity-not-disk-is-the-real-limit)
 - [Rebuilding for more cores](#rebuilding-for-more-cores)
@@ -450,6 +451,48 @@ launch on a host with no reference directory.
 Edits show up live — bind mounts share inodes, so updating a file here changes what
 running sandboxes see, with no relaunch.
 
+## Sharing agent output between users
+
+By default, nothing an agent produces is visible to anyone but its own user. Plans it
+writes on its own go to `~/.claude/plans` inside the container, which is
+`users/<user>/shared/.claude/plans/` on the host — and that tree is `chmod 700`.
+(`$SHARED_HOME` means shared across *that user's* instances, not across people; the
+name misleads.)
+
+For a place agents can publish to, create one writable directory:
+
+```bash
+sudo mkdir -p /mnt/sandbox/plans
+sudo chmod 1777 /mnt/sandbox/plans     # sticky, like /tmp and like users/
+```
+
+`provision-sandbox-user.sh` picks it up when it exists and adds
+
+```bash
+export CLAUDE_SANDBOX_RW_MOUNTS="/mnt/sandbox/plans"
+```
+
+so it appears in every sandbox at **`/projects/plans`**, read-write. Existing users
+re-run step 1; a user who already set their own `RW_MOUNTS` is left alone.
+
+**Why `1777` rather than a group.** It matches `users/` and needs no per-user admin
+step: anyone can create files, and the sticky bit stops them removing or renaming
+anyone else's. A `sandbox` group with `2775` would be tidier on paper but requires
+`usermod -aG` for every new account, which breaks the self-service property that the
+rest of this setup is built around.
+
+**Permissions work out without intervention** — measured: the container's umask is
+`0022`, so an agent writing `/projects/plans/foo.md` produces a `644` file owned by
+its own user. Other users can read it; they cannot overwrite it, since `644` denies
+group and other writes. That is usually what you want for a published plan.
+
+Tell the agent explicitly to write there — `/projects/plans/2026-08-11-migration.md`
+— because its default plan location is the private one.
+
+For anything that should outlive a scratch directory, prefer committing the document
+into the repo it concerns and pushing it: that gets review, history and attribution,
+none of which a shared folder provides.
+
 ### Which directory for what
 
 | | Owner | Agent sees it at | Agent can write? | Good for |
@@ -457,6 +500,7 @@ running sandboxes see, with no relaunch.
 | `users/<user>/workspace/` | that user | `/workspace` | yes | their repos and working files |
 | `users/<user>/context/` | that user | `/context` | no | *their own* plans and notes |
 | `/mnt/sandbox/reference/` | admin | `/read-only-reference/reference` | no | material shared by everyone |
+| `/mnt/sandbox/plans/` | whoever writes each file | `/projects/plans` | yes | agent output to hand to colleagues |
 
 An admin *can* write into a user's `context/` with `sudo cp` followed by
 `sudo chown <user>:<user>`, and that is fine for a one-off. **Do not skip the
