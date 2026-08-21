@@ -143,7 +143,7 @@ echo "=== directories on ${SANDBOX_ROOT} ==="
 # Everything per-user lives on the data disk, NOT in $HOME: home directories are
 # on the small boot disk, and the image plus workspaces do not fit there.
 for d in "${USER_ROOT}/workspace" "${USER_ROOT}/state" "${USER_ROOT}/shared" \
-         "${USER_ROOT}/fiss-mcp"; do
+         "${USER_ROOT}/fiss-mcp" "${USER_ROOT}/context"; do
     if [[ -d "$d" ]]; then
         ok "exists: $d"
     else
@@ -389,7 +389,8 @@ cat <<EOF
 Your paths, which the README cannot know:
 
   env file    ${ENV_FILE}
-  workspace   ${USER_ROOT}/workspace     (mounted inside as /workspace)
+  workspace   ${USER_ROOT}/workspace     (mounted inside as /workspace, rw)
+  context     ${USER_ROOT}/context       (mounted inside as /context, READ-ONLY)
   state       ${USER_ROOT}/state
   repo        ${REPO_ROOT}
 

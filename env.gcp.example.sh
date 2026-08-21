@@ -54,13 +54,18 @@ export CLAUDE_SANDBOX_SHARED=__USER_ROOT__/shared
 # chmod 700), so put whatever the agent needs in here.
 export CLAUDE_SANDBOX_PROJECTS_DIR=__USER_ROOT__/workspace
 
-# Read-only context, bind-mounted to /context. Points at the shared checkout;
-# the mount is :ro, so one clone is safe to share.
+# Read-only context, bind-mounted to /context. This is where you put material the
+# agent should READ but never modify: plans, specs, notes, a data dictionary.
 #
-# Substituted at render time rather than derived from ${BASH_SOURCE[0]}: when the
-# checkout is read-only this env file is written into the user's own tree, and
-# dirname would resolve to a directory with no context_reference/ in it.
-export CLAUDE_SANDBOX_CONTEXT_DIR=__REPO_ROOT__/context_reference
+# Deliberately your own directory, not the shared checkout. It used to point at
+# __REPO_ROOT__/context_reference, which is the ADMIN's tree: read-only to everyone
+# else, so the one channel meant for "drop a file in for the agent" was the one
+# channel a user could not write to. Now provisioning creates this for you.
+#
+# The mount is :ro, so the agent cannot change what you put here — that is the
+# difference from /workspace, and the reason to use it for a plan you do not want
+# rewritten.
+export CLAUDE_SANDBOX_CONTEXT_DIR=__USER_ROOT__/context
 
 # The fiss-mcp venv and its pinned clone. MUST be outside the checkout on a
 # shared host: the clone may be read-only, and two users cannot share one venv.

@@ -135,7 +135,8 @@ boot disk, while the data disk is large and survives a VM rebuild.
 ```
 /mnt/sandbox/users/<user>/          chmod 700
 ├── env.<user>.sh                   your config; the only place it lives
-├── workspace/                      -> /workspace (rw); clone your repos here
+├── workspace/                      -> /workspace (rw); repos and loose files
+├── context/                        -> /context (READ-ONLY); plans the agent cannot edit
 ├── state/                          per-instance hot state, .claude.json
 ├── shared/.claude/                 settings, hooks, plugins, YOUR Claude token
 └── fiss-mcp/{venv,fiss-mcp}/       your own uv venv and pinned clone
@@ -257,6 +258,20 @@ per-sandbox and invisible to the host's `claude`.
 
 Inside, `/workspace` already contains `warp` and `warp-tools` from step 1, so there
 is nothing else to set up before the agent can do useful work.
+
+### Adding files that are not repos
+
+Two drop-in directories, both already mounted, no configuration:
+
+```bash
+cp plan.md  /mnt/sandbox/users/$USER/context/     # -> /context/plan.md, read-only
+cp notes.md /mnt/sandbox/users/$USER/workspace/   # -> /workspace/notes.md, writable
+```
+
+Use `context/` for a plan or spec you do not want the agent rewriting — the mount is
+`:ro`, so it cannot. Full set of routes, including how to copy files up from your
+laptop, is in
+[Getting files into the sandbox](CONFIG.md#getting-files-into-the-sandbox).
 
 ### Adding more repos
 

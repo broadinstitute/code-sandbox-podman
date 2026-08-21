@@ -12,6 +12,7 @@ before launching. Templates: `env.podman.example.sh` (local),
 - [Mount layout](#mount-layout)
 - [Read-only reference mounts](#read-only-reference-mounts)
 - [Read-write project mounts, and how pushing works](#read-write-project-mounts-and-how-pushing-works)
+- [Getting files into the sandbox](#getting-files-into-the-sandbox)
 - [Installing packages](#installing-packages)
 - [Persistence](#persistence)
 - [Customizing the image](#customizing-the-image)
@@ -251,6 +252,79 @@ installed.
 - **Ephemeral**, gone when the container exits: anything written outside the
   mounts. `uv pip install`, `cargo install`, `sudo apt install`, `/tmp`. To keep
   them, bake them into the image or mount the relevant directory.
+
+## Getting files into the sandbox
+
+Four destinations, differing in whether the agent can write to them and whether you
+have to configure anything. Nothing needs to go inside a repo.
+
+| Put it here | Appears inside as | Agent can write? | Use it for |
+|---|---|---|---|
+| `$CLAUDE_SANDBOX_PROJECTS_DIR/` (`users/$USER/workspace/`) | `/workspace/<name>` | **yes** | loose files to work on — notes, scratch scripts, data. Sits *next to* the repos, not in them |
+| `$CLAUDE_SANDBOX_CONTEXT_DIR/` (`users/$USER/context/`) | `/context/<name>` | **no** — `:ro` | plans, specs, standards, a data dictionary. Anything you do not want rewritten |
+| `CLAUDE_SANDBOX_RO_MOUNTS` | `/read-only-reference/<name>` | no | reference datasets living elsewhere on the host, shared between users |
+| `CLAUDE_SANDBOX_RW_MOUNTS` | `/projects/<name>` | yes | a checkout that must live outside your workspace |
+
+The first two need **no configuration at all** — both are already mounted, so
+dropping a file in is the whole operation:
+
+```bash
+cp plan.md /mnt/sandbox/users/$USER/context/      # agent reads it, cannot edit it
+cp notes.md /mnt/sandbox/users/$USER/workspace/   # agent can edit it too
+```
+
+Then refer to it in a prompt by its container path: `/context/plan.md`.
+
+`/context` being read-only is the point of having two: a plan the agent cannot
+silently rewrite stays trustworthy as a reference. Enforcement is at the mount
+(`MS_RDONLY`), so it survives `sudo` inside the container — see
+[read-only reference mounts](#read-only-reference-mounts).
+
+### Transferring from your laptop
+
+The sandbox has no upload channel of its own; files arrive by normal file transfer
+to the VM. Use plain `scp` through an IAP tunnel:
+
+```bash
+# once per session, in another terminal
+gcloud compute start-iap-tunnel "$VM" 22 --local-host-port=localhost:2222 --zone "$ZONE" &
+
+scp -P 2222 plan.md  you@localhost:/mnt/sandbox/users/you/context/
+scp -P 2222 -r data/ you@localhost:/mnt/sandbox/users/you/workspace/
+```
+
+Prefer that over `gcloud compute scp`, for the same reason as `gcloud compute ssh`:
+it ensures its key is in project metadata for the username it is about to use, which
+[creates accounts as a side effect](SERVER.md#logging-in-to-a-sudo-less-agent-account)
+and can hand them passwordless sudo.
+
+For a handful of small text files, pasting into a heredoc over an existing SSH
+session is often quicker than setting up a tunnel:
+
+```bash
+cat > /mnt/sandbox/users/$USER/context/plan.md <<'EOF'
+...paste...
+EOF
+```
+
+Quote the delimiter (`<<'EOF'`), or the shell will expand `$vars` and execute
+anything in backticks as you paste it.
+
+### If your env file predates this
+
+`CLAUDE_SANDBOX_CONTEXT_DIR` used to point at the shared checkout's
+`context_reference/`, which is the admin's directory and read-only to everyone else —
+so the drop-a-file-in channel was the one thing users could not use. Provisioning now
+creates `users/$USER/context` instead. An env file written before that change keeps
+the old value; fix it with one edit:
+
+```bash
+grep CONTEXT_DIR /mnt/sandbox/users/$USER/env.$USER.sh
+# if it says .../repo/context_reference, point it at your own tree:
+mkdir -p /mnt/sandbox/users/$USER/context
+sed -i "s|^export CLAUDE_SANDBOX_CONTEXT_DIR=.*|export CLAUDE_SANDBOX_CONTEXT_DIR=/mnt/sandbox/users/$USER/context|" \
+  /mnt/sandbox/users/$USER/env.$USER.sh
+```
 
 ## Installing packages
 
