@@ -269,8 +269,14 @@ cp notes.md /mnt/sandbox/users/$USER/workspace/   # -> /workspace/notes.md, writ
 ```
 
 Use `context/` for a plan or spec you do not want the agent rewriting — the mount is
-`:ro`, so it cannot. Full set of routes, including how to copy files up from your
-laptop, is in
+`:ro`, so it cannot.
+
+**Uploading through the Cloud Console?** Its *Upload file* button has no destination
+field: everything lands in your home directory, and `/home` is on the boot disk, which
+the sandbox does not mount. So upload, then move it into one of the two directories
+above — `mv ~/plan.md /mnt/sandbox/users/$USER/context/`.
+
+Full set of routes, including bucket staging and `scp` over a tunnel, is in
 [Getting files into the sandbox](CONFIG.md#getting-files-into-the-sandbox).
 
 ### Adding more repos

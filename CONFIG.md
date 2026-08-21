@@ -13,6 +13,7 @@ before launching. Templates: `env.podman.example.sh` (local),
 - [Read-only reference mounts](#read-only-reference-mounts)
 - [Read-write project mounts, and how pushing works](#read-write-project-mounts-and-how-pushing-works)
 - [Getting files into the sandbox](#getting-files-into-the-sandbox)
+  - [Uploading through the Cloud Console](#uploading-through-the-cloud-console-no-terminal-setup)
 - [Installing packages](#installing-packages)
 - [Persistence](#persistence)
 - [Customizing the image](#customizing-the-image)
@@ -279,6 +280,34 @@ Then refer to it in a prompt by its container path: `/context/plan.md`.
 silently rewrite stays trustworthy as a reference. Enforcement is at the mount
 (`MS_RDONLY`), so it survives `sudo` inside the container — see
 [read-only reference mounts](#read-only-reference-mounts).
+
+### Uploading through the Cloud Console (no terminal setup)
+
+The SSH-in-browser window has an **Upload file** item in its gear menu. Note what it
+does *not* have: a destination field. Everything lands in your **home directory**,
+and `/home` is on the boot disk — which the sandbox does not mount. A file sitting in
+`~` is invisible to the agent.
+
+So it is two steps, and the second is the one people miss:
+
+```bash
+ls -lt ~ | head -3                                   # confirm what arrived
+mv ~/plan.md /mnt/sandbox/users/$USER/context/       # read-only to the agent
+# or
+mv ~/notes.md /mnt/sandbox/users/$USER/workspace/    # agent can edit it too
+```
+
+Then refer to it as `/context/plan.md` or `/workspace/notes.md` in a prompt.
+
+Console upload is fine for plans, specs and small data. For anything large it is slow
+and flaky; use `scp` below, or stage via a bucket:
+
+```bash
+gcloud storage cp gs://your-bucket/big.h5ad /mnt/sandbox/users/$USER/workspace/
+```
+
+That uses *your* credentials from step 2, so it works even though the VM has no
+service account of its own.
 
 ### Transferring from your laptop
 
