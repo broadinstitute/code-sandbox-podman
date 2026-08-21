@@ -219,22 +219,43 @@ echo "=== env file ==="
 # a shared checkout. An earlier version put it in the checkout when that happened
 # to be writable, so two users on one host could have it in different places.
 ENV_FILE="${USER_ROOT}/env.${USER}.sh"
+LEGACY_ENV="${REPO_ROOT}/env.${USER}.sh"
+
+# CONTEXT_DIR used to default to ${REPO_ROOT}/context_reference — the ADMIN's
+# checkout, read-only to everyone else. Users who provisioned before that changed
+# have a /context they cannot write to, which defeats the one mount that exists for
+# handing files to the agent. Repair it rather than leaving them to notice.
+repoint_context_dir() {
+    local f="$1"
+    grep -q "^export CLAUDE_SANDBOX_CONTEXT_DIR=${REPO_ROOT}" "$f" 2>/dev/null || return 0
+    sed -i "s|^export CLAUDE_SANDBOX_CONTEXT_DIR=.*|export CLAUDE_SANDBOX_CONTEXT_DIR=${USER_ROOT}/context|" "$f"
+    ok "repointed CLAUDE_SANDBOX_CONTEXT_DIR to ${USER_ROOT}/context"
+    warn "  it pointed into the shared checkout, which you cannot write to."
+    warn "  Put files for the agent in ${USER_ROOT}/context (appears as /context, read-only)."
+}
+
 if [[ -e "$ENV_FILE" ]]; then
     ok "env file already exists, left alone: ${ENV_FILE}"
+    repoint_context_dir "$ENV_FILE"
+elif [[ -e "$LEGACY_ENV" ]]; then
+    # An older version wrote the env file into the checkout. That file is the
+    # user's ONLY config, so migrate it instead of rendering a fresh one on top:
+    # rendering first would silently discard whatever they had customised, and
+    # telling them to delete the old copy before migrating it -- which this script
+    # used to do -- would destroy their setup outright.
+    cp -a "$LEGACY_ENV" "$ENV_FILE"
+    ok "migrated your env file out of the shared checkout:"
+    ok "  ${LEGACY_ENV} -> ${ENV_FILE}"
+    repoint_context_dir "$ENV_FILE"
+    warn "the old copy is still in the checkout. Launch once from the new one, then"
+    warn "  remove it:  rm ${LEGACY_ENV}"
+    warn "  Leaving it is a footgun: anyone who sources it gets YOUR paths."
 else
     sed -e "s|__USER_ROOT__|${USER_ROOT}|g" \
         -e "s|__REPO_ROOT__|${REPO_ROOT}|g" \
         -e "s|__USER__|${USER}|g" \
         "${REPO_ROOT}/env.gcp.example.sh" > "$ENV_FILE"
     ok "wrote ${ENV_FILE}"
-fi
-
-# Migrate a stray copy left in the checkout by an older version, so a user does
-# not end up sourcing a stale file that no longer matches the template.
-LEGACY_ENV="${REPO_ROOT}/env.${USER}.sh"
-if [[ -e "$LEGACY_ENV" ]]; then
-    warn "an older env file exists in the checkout: ${LEGACY_ENV}"
-    warn "  the current one is ${ENV_FILE} -- delete the old one to avoid confusion"
 fi
 
 # ------------------------------------------------------------- staleness ----
