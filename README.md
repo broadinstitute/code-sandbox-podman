@@ -269,7 +269,28 @@ cp notes.md /mnt/sandbox/users/$USER/workspace/   # -> /workspace/notes.md, writ
 ```
 
 Use `context/` for a plan or spec you do not want the agent rewriting — the mount is
-`:ro`, so it cannot.
+`:ro`, so it cannot. Verified: both an append and a `touch` inside come back
+`Read-only file system`.
+
+**Permissions.** The agent runs as you, so anything you copy or upload yourself just
+works. Exactly one combination fails, and it fails silently — a file owned by someone
+else *and* not world-readable, which is what `sudo cp` of a private file leaves
+behind:
+
+| Owner on the host | Mode | Agent can read it |
+|---|---|---|
+| you | 644 or 600 | yes |
+| someone else | 644 | yes |
+| someone else | 600 | **no** |
+
+```bash
+ls -l /mnt/sandbox/users/$USER/context/     # owner should be you
+chmod 644 /mnt/sandbox/users/$USER/context/*        # if you own them
+sudo chown $USER:$USER /mnt/sandbox/users/$USER/context/*   # if you do not
+```
+
+Your `context/` also contains a `README.md` written at provisioning time that repeats
+this, so it is discoverable from an SSH session.
 
 **Uploading through the Cloud Console?** Its *Upload file* button has no destination
 field: everything lands in your home directory, and `/home` is on the boot disk, which

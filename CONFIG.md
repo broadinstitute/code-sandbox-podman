@@ -276,6 +276,24 @@ cp notes.md /mnt/sandbox/users/$USER/workspace/   # agent can edit it too
 
 Then refer to it in a prompt by its container path: `/context/plan.md`.
 
+**Set the permissions if someone else put the file there.** The container runs as the
+invoking user, so files you copy yourself are already readable. Measured, the only
+failing combination is a file owned by another account that is not world-readable —
+which is what `sudo cp` of a mode-600 file produces, and the agent simply reports it
+cannot read it:
+
+| Owner on the host | Mode | Agent can read it |
+|---|---|---|
+| you | 644 or 600 | yes |
+| someone else | 644 | yes |
+| someone else | 600 | **no** |
+
+```bash
+sudo chown "$USER:$USER" /mnt/sandbox/users/$USER/context/handed-over.md
+# or, to leave ownership alone:
+sudo chmod 644 /mnt/sandbox/users/$USER/context/handed-over.md
+```
+
 `/context` being read-only is the point of having two: a plan the agent cannot
 silently rewrite stays trustworthy as a reference. Enforcement is at the mount
 (`MS_RDONLY`), so it survives `sudo` inside the container — see

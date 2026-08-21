@@ -459,9 +459,17 @@ running sandboxes see, with no relaunch.
 | `/mnt/sandbox/reference/` | admin | `/read-only-reference/reference` | no | material shared by everyone |
 
 An admin *can* write into a user's `context/` with `sudo cp` followed by
-`sudo chown <user>:<user>`, and that is fine for a one-off. Skipping the `chown`
-leaves a root-owned file the user cannot edit or delete without sudo, in a directory
-they otherwise own.
+`sudo chown <user>:<user>`, and that is fine for a one-off. **Do not skip the
+`chown`.** It leaves a root-owned file the user cannot edit or delete in a directory
+they otherwise own, and if the source file was mode 600 the agent cannot even read it
+— measured: owned-by-another-account plus not-world-readable is the one combination
+that is denied inside the container, and the only symptom is the agent saying it
+cannot read the file.
+
+```bash
+sudo cp plan.md /mnt/sandbox/users/$U/context/
+sudo chown "$U:$U" /mnt/sandbox/users/$U/context/plan.md   # not optional
+```
 
 ## Attaching a GPU
 

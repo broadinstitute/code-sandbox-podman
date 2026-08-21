@@ -258,6 +258,43 @@ else
     ok "wrote ${ENV_FILE}"
 fi
 
+# Leave a note in the context dir. Someone who has ssh'd in and is standing in an
+# empty directory wondering what it is for should not have to find the README on
+# GitHub. Written once, only while the directory is empty, so it never fights with
+# real content.
+if [[ -d "${USER_ROOT}/context" ]] && [[ -z "$(ls -A "${USER_ROOT}/context" 2>/dev/null)" ]]; then
+    cat > "${USER_ROOT}/context/README.md" <<CTXNOTE
+# Your read-only context directory
+
+Drop files here for the agent to READ: plans, specs, notes, a data dictionary.
+They appear inside the sandbox at \`/context/<name>\` and the mount is \`:ro\`, so the
+agent cannot change or delete them. Refer to them in a prompt by that path, e.g.
+\`/context/plan.md\`.
+
+For files the agent should be able to EDIT, use \`${USER_ROOT}/workspace\` instead,
+which appears as \`/workspace\`.
+
+## Permissions
+
+The agent runs as you, so anything you own is readable and nothing further is needed.
+One combination fails, silently:
+
+| Owner on the host | Mode | Agent can read it |
+|---|---|---|
+| you | 644 or 600 | yes |
+| someone else (e.g. an admin used \`sudo cp\`) | 644 | yes |
+| someone else | 600 | **NO** |
+
+If a file was placed here by someone else and the agent cannot see it:
+
+    chmod 644 <file>            # if you own it
+    sudo chown ${USER}:${USER} <file>   # if you do not
+
+Files you copy or upload yourself are already correct.
+CTXNOTE
+    ok "seeded ${USER_ROOT}/context/README.md explaining what the directory is for"
+fi
+
 # Shared reference material, if an admin has set some up. This is the right
 # mechanism for "the same docs for everyone": one admin-owned directory, mounted
 # read-only into every sandbox, instead of copying files into N per-user trees that
