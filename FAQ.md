@@ -131,7 +131,23 @@ source /mnt/sandbox/users/$USER/env.$USER.sh
 ./start_sandbox.sh                           # fzf picker over your sessions
 ```
 
-To find a uuid without the picker, the filenames *are* the session ids:
+**To see what your previous sessions were about** — a directory of uuids tells you
+nothing — list them with the first prompt of each:
+
+```bash
+./scripts/list-sessions.sh          # newest first, with the resume command for each
+./scripts/list-sessions.sh --pick   # fzf picker with a conversation preview, then resumes
+```
+
+```
+WHEN               MSGS   SIZE  FIRST PROMPT
+2026-08-06 12:35   1880   4.5M  test that you can use mcp to reach this terra submission
+                                resume: ./run_claude_docker.sh --resume 08e622fe-...
+2026-08-05 14:54     34   119K  describe the warp repo and agents.md in one short paragraph
+                                resume: ./run_claude_docker.sh --resume 857ec2f8-...
+```
+
+Or read the directory directly — the filenames *are* the session ids:
 
 ```bash
 ls -lt "$CLAUDE_SANDBOX_HOME/.claude/projects/-workspace/"*.jsonl | head

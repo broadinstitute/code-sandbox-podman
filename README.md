@@ -254,7 +254,10 @@ source /mnt/sandbox/users/$USER/env.$USER.sh
 ```
 
 Later sessions: `./run_claude_docker.sh --continue` for the most recent, or
-`--resume <session-id>` for a specific one; `./start_sandbox.sh` gives an fzf picker.
+`--resume <session-id>` for a specific one. To see what the previous ones *were*,
+`./scripts/list-sessions.sh` lists them newest-first with the opening prompt of each,
+and `--pick` turns that into an fzf picker with a conversation preview that resumes
+what you choose.
 Session IDs are per-sandbox and invisible to the host's `claude`.
 
 **Long runs: launch inside `tmux`.** The container is `--rm -it`, so it dies with your
