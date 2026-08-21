@@ -258,6 +258,31 @@ else
     ok "wrote ${ENV_FILE}"
 fi
 
+# Shared reference material, if an admin has set some up. This is the right
+# mechanism for "the same docs for everyone": one admin-owned directory, mounted
+# read-only into every sandbox, instead of copying files into N per-user trees that
+# are chmod 700 and therefore need sudo to write into.
+#
+# Enabled only when the directory actually EXISTS. The launcher treats a missing
+# CLAUDE_SANDBOX_RO_MOUNTS path as fatal — it refuses to let the engine auto-create
+# it — so shipping this enabled by default would break every launch on a host where
+# no admin ever created it.
+REFERENCE_DIR="${SANDBOX_ROOT}/reference"
+if [[ -d "$REFERENCE_DIR" ]]; then
+    if grep -q "^export CLAUDE_SANDBOX_RO_MOUNTS=" "$ENV_FILE"; then
+        ok "you already set CLAUDE_SANDBOX_RO_MOUNTS — left alone"
+    else
+        # Replace the commented template line if present, else append.
+        if grep -q "^#export CLAUDE_SANDBOX_RO_MOUNTS=" "$ENV_FILE"; then
+            sed -i "s|^#export CLAUDE_SANDBOX_RO_MOUNTS=.*|export CLAUDE_SANDBOX_RO_MOUNTS=\"${REFERENCE_DIR}\"|" \
+                "$ENV_FILE"
+        else
+            printf '\nexport CLAUDE_SANDBOX_RO_MOUNTS="%s"\n' "$REFERENCE_DIR" >> "$ENV_FILE"
+        fi
+        ok "shared reference dir found; mounted read-only at /read-only-reference/reference"
+    fi
+fi
+
 # ------------------------------------------------------------- staleness ----
 echo
 echo "=== checkout freshness ==="

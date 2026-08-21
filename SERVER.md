@@ -30,6 +30,7 @@ NETWORK=default          # see the note under "Create the instance"
 - [The shared image store](#the-shared-image-store)
 - [Updating the image later](#updating-the-image-later)
 - [Adding a user](#adding-a-user)
+- [Sharing reference docs with everyone](#sharing-reference-docs-with-everyone)
 - [Attaching a GPU](#attaching-a-gpu)
 - [Capacity, not disk, is the real limit](#capacity-not-disk-is-the-real-limit)
 - [Rebuilding for more cores](#rebuilding-for-more-cores)
@@ -416,6 +417,51 @@ gcloud compute project-info add-metadata --metadata-from-file ssh-keys=keys.new
 
 Run that from a laptop, not from the VM: the instance's own credentials cannot
 read project metadata (`Request had insufficient authentication scopes`).
+
+## Sharing reference docs with everyone
+
+To hand the same material to every sandbox — house standards, a data dictionary, a
+pipeline spec — do **not** copy it into each `users/<name>/context/`. Those are
+`chmod 700`, so it needs `sudo` per user, and every later edit has to be repeated N
+times. Use one admin-owned directory instead:
+
+```bash
+sudo mkdir -p /mnt/sandbox/reference
+sudo chmod 755 /mnt/sandbox/reference        # world-readable, admin-writable
+sudo cp house-standards.md data-dictionary.md /mnt/sandbox/reference/
+```
+
+`provision-sandbox-user.sh` picks it up automatically: if `/mnt/sandbox/reference`
+exists, the rendered env file gets
+
+```bash
+export CLAUDE_SANDBOX_RO_MOUNTS="/mnt/sandbox/reference"
+```
+
+and it appears in every sandbox at `/read-only-reference/reference`, read-only. Users
+who provisioned *before* you created it just re-run step 1 — it is idempotent, and it
+leaves a user's own `RO_MOUNTS` alone if they set one.
+
+**It is enabled only when the directory exists**, and that gate is load-bearing: the
+launcher treats a missing `CLAUDE_SANDBOX_RO_MOUNTS` path as fatal rather than letting
+podman auto-create it, so shipping the line enabled by default would break every
+launch on a host with no reference directory.
+
+Edits show up live — bind mounts share inodes, so updating a file here changes what
+running sandboxes see, with no relaunch.
+
+### Which directory for what
+
+| | Owner | Agent sees it at | Agent can write? | Good for |
+|---|---|---|---|---|
+| `users/<user>/workspace/` | that user | `/workspace` | yes | their repos and working files |
+| `users/<user>/context/` | that user | `/context` | no | *their own* plans and notes |
+| `/mnt/sandbox/reference/` | admin | `/read-only-reference/reference` | no | material shared by everyone |
+
+An admin *can* write into a user's `context/` with `sudo cp` followed by
+`sudo chown <user>:<user>`, and that is fine for a one-off. Skipping the `chown`
+leaves a root-owned file the user cannot edit or delete without sudo, in a directory
+they otherwise own.
 
 ## Attaching a GPU
 
