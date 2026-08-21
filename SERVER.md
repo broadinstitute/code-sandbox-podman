@@ -189,7 +189,7 @@ sudo apt-get update
 sudo apt-get install -y \
   podman passt uidmap fuse-overlayfs crun \
   dbus-user-session slirp4netns \
-  git jq fzf gh
+  git jq fzf gh tmux
 ```
 
 Every package is load-bearing:
@@ -203,6 +203,7 @@ Every package is load-bearing:
 | `dbus-user-session` | systemd user session; `loginctl enable-linger` does not hold without it |
 | `git`, `jq`, `fzf` | repo operations, host-side JSON, the `start_sandbox.sh` menu |
 | `gh` | GitHub CLI, for each user's own `gh auth login` |
+| `tmux` | keeps a sandbox alive across an SSH drop. The launcher runs `--rm -it`, so losing the terminal kills the container and deletes it — see [the FAQ](FAQ.md#my-ssh-dropped-how-do-i-reconnect-to-the-session) |
 
 Then **uv**, which Debian does not package. Install it once, system-wide, rather
 than having each user run a `curl | sh`:

@@ -253,8 +253,16 @@ source /mnt/sandbox/users/$USER/env.$USER.sh
 ./run_claude_docker.sh
 ```
 
-Later sessions: `./run_claude_docker.sh --resume <session-id>`. Session IDs are
-per-sandbox and invisible to the host's `claude`.
+Later sessions: `./run_claude_docker.sh --continue` for the most recent, or
+`--resume <session-id>` for a specific one; `./start_sandbox.sh` gives an fzf picker.
+Session IDs are per-sandbox and invisible to the host's `claude`.
+
+**Long runs: launch inside `tmux`.** The container is `--rm -it`, so it dies with your
+terminal — an SSH drop ends the run and removes the container. `tmux new -s claude`
+first, `Ctrl-b d` to detach, `tmux attach -t claude` to come back. Transcripts survive
+either way, so a dropped session can always be resumed; work the agent had in flight
+cannot. Details in
+[the FAQ](FAQ.md#my-ssh-dropped-how-do-i-reconnect-to-the-session).
 
 Inside, `/workspace` already contains `warp` and `warp-tools` from step 1, so there
 is nothing else to set up before the agent can do useful work.

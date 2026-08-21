@@ -111,6 +111,53 @@ version, and the launcher sets `DISABLE_AUTOUPDATER=1`. To move versions, bump
 that variable and rebuild — an in-place self-update would make the image
 non-reproducible and would be lost on the next container exit anyway.
 
+### My SSH dropped: how do I reconnect to the session?
+
+You do not reattach; you resume. The launcher runs `podman run --rm -it`, so the
+container is tied to your terminal **and** deleted on exit: losing SSH destroys the
+TTY, `claude` takes SIGHUP, and the container is removed. `podman ps` will show
+nothing.
+
+The *conversation* survives, though — transcripts are on the data disk under
+`$CLAUDE_SANDBOX_HOME/.claude/projects/-workspace/<uuid>.jsonl`. Relaunch and pick up
+where you left off:
+
+```bash
+cd /mnt/sandbox/repo
+source /mnt/sandbox/users/$USER/env.$USER.sh
+
+./run_claude_docker.sh --continue            # most recent conversation
+./run_claude_docker.sh --resume <uuid>       # a specific one
+./start_sandbox.sh                           # fzf picker over your sessions
+```
+
+To find a uuid without the picker, the filenames *are* the session ids:
+
+```bash
+ls -lt "$CLAUDE_SANDBOX_HOME/.claude/projects/-workspace/"*.jsonl | head
+```
+
+**Work in progress is a different matter.** Files the agent had already written to
+`/workspace` are on the host and intact — that is a bind mount. Anything it held only
+in memory, plus whatever it was part-way through, is gone. Uncommitted edits it made
+are still there; a command it was running died with the container.
+
+### Stop it happening: run inside tmux
+
+The container dies with the terminal, so put the terminal somewhere that outlives your
+connection:
+
+```bash
+sudo apt-get install -y tmux        # once, if the admin has not
+tmux new -s claude                  # then launch the sandbox inside it
+# detach: Ctrl-b d       reattach later: tmux attach -t claude
+```
+
+`loginctl enable-linger` (done by provisioning) is what lets that tmux session keep
+running after you log out — without it systemd tears down your user slice and takes
+tmux with it. This is worth doing for anything long: a dropped laptop lid should not
+kill a 40-minute run.
+
 ### I have to log in to Claude every time
 
 You should log in **once per state directory**, not once per launch. The token is
