@@ -61,7 +61,27 @@ removed: list[str] = []
 if not allow_host_writes:
     for tool_name in HOST_WRITE_TOOLS:
         try:
-            server.mcp.remove_tool(tool_name)
+            if hasattr(server.mcp, "remove_tool"):
+                server.mcp.remove_tool(tool_name)
+            elif hasattr(server.mcp, "local_provider") and hasattr(server.mcp.local_provider, "remove_tool"):
+                server.mcp.local_provider.remove_tool(tool_name)
+            elif hasattr(server.mcp, "_local_provider") and hasattr(server.mcp._local_provider, "remove_tool"):
+                server.mcp._local_provider.remove_tool(tool_name)
+            else:
+                # Try to remove directly from internal components dict if all else fails
+                found = False
+                for attr in ("_components", "_tools", "tools"):
+                    if hasattr(server.mcp, "local_provider") and hasattr(server.mcp.local_provider, attr):
+                        d = getattr(server.mcp.local_provider, attr)
+                        if isinstance(d, dict) and f"tool:{tool_name}" in d:
+                            del d[f"tool:{tool_name}"]
+                            found = True
+                        elif isinstance(d, dict) and tool_name in d:
+                            del d[tool_name]
+                            found = True
+                if not found:
+                    raise AttributeError(f"Could not find a way to remove '{tool_name}' in this FastMCP version.")
+
             removed.append(tool_name)
         except Exception as exc:  # noqa: BLE001
             # Loud, and fatal. Silently serving a tool that can write to the
