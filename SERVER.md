@@ -1,7 +1,7 @@
 # Running the shared server (admin guide)
 
 Everything in this document is done **once, by an admin**. Users never run any of
-it — their side is [Per-user setup](README.md#per-user-setup-every-user-does-this-once),
+it — their side is [Per-user setup](USER-SETUP.md),
 which is five steps and needs no root.
 
 Verified end to end on a real GCP deployment: Debian 13, podman 5.4.2, a separate
@@ -310,7 +310,7 @@ have root. Note that `gcloud compute ssh` maintains its own short-lived expiring
 entries at the *instance* level; leave those alone.
 
 That is the only admin action needed. They then run
-[the five user steps](README.md#per-user-setup-every-user-does-this-once)
+[the five user steps](USER-SETUP.md)
 themselves.
 
 **Route B — a local account, no Google identity, no metadata change.** This is the

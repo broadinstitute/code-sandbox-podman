@@ -21,7 +21,7 @@ Grouped by where you hit them:
 You have not been provisioned yet. The shared image store becomes visible only
 through `~/.config/containers/storage.conf`, which
 `scripts/provision-sandbox-user.sh` writes — step 1 of
-[Per-user setup](README.md#per-user-setup-every-user-does-this-once). Run it
+[Per-user setup](USER-SETUP.md). Run it
 before anything else podman-related.
 
 This is worth knowing because the symptom looks like the shared store is broken

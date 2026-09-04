@@ -180,7 +180,7 @@ elif (( ${#WANTED[@]} == 0 )) && [[ -f "$USER_ENV_FILE" ]]; then
   # because that clone belongs to whoever set the host up. One unsourced file, two
   # confusing failures, neither of which names the cause. So: stop here.
   fatal "your env file exists but has not been sourced into this shell."
-  echo "          Run all three commands together (step 4 in the README):"
+  echo "          Run all three commands together (step 4 in USER-SETUP.md):"
   echo
   echo "            cd ${REPO_ROOT}"
   echo "            source ${USER_ENV_FILE}"
@@ -249,7 +249,7 @@ ${GRN}setup_host_podman.sh: host is ready.${RST}
 
 Nothing was installed and no system state was changed.
 
-This is step 4 of "Per-user setup" in the README. Continue there with step 5.
+This is step 4 of "Per-user setup" in USER-SETUP.md. Continue there with step 5.
 
 The README is the single source of truth for the ordering; this script does not
 repeat it, so the two cannot drift apart.

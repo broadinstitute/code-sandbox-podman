@@ -486,14 +486,14 @@ fi
 
 # ------------------------------------------------------------- what's left --
 echo
-echo "${GRN}Step 1 done.${RST}  This script is step 1 of \"Per-user setup\" in the README."
+echo "${GRN}Step 1 done.${RST}  This script is step 1 of \"Per-user setup\" in USER-SETUP.md."
 echo
-echo "Nothing was authenticated. Steps 2-5 are yours, and the README has the"
+echo "Nothing was authenticated. Steps 2-5 are yours, and USER-SETUP.md has the"
 echo "details and the reasons — this script does not repeat them, so the two"
 echo "cannot drift apart."
 cat <<EOF
 
-Your paths, which the README cannot know:
+Your paths, which USER-SETUP.md cannot know:
 
   env file    ${ENV_FILE}
   workspace   ${USER_ROOT}/workspace     (mounted inside as /workspace, rw)
@@ -501,7 +501,7 @@ Your paths, which the README cannot know:
   state       ${USER_ROOT}/state
   repo        ${REPO_ROOT}
 
-What is left, per the README:
+What is left, per USER-SETUP.md:
 
   Step 2  Google Cloud     gcloud auth login + application-default login
                            (both --no-launch-browser; answer Y to the
@@ -517,6 +517,6 @@ repos any time with:
 
   cd ${USER_ROOT}/workspace && git clone <url>
 
-Read the README before running steps 2 and 3. Both have non-obvious failure
+Read USER-SETUP.md before running steps 2 and 3. Both have non-obvious failure
 modes that cost real time if you skip the explanation.
 EOF
