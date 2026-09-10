@@ -1,7 +1,7 @@
 # Fork notes — rootless podman on Fedora/Nobara
 
 Fork of [jonn-smith/claude-docker-sandbox](https://github.com/jonn-smith/claude-docker-sandbox)
-(`upstream` remote), branch `podman-nobara`, forked at upstream commit `b969b39`.
+(`upstream` remote), branch `main`, forked at upstream commit `b969b39`.
 
 Upstream is Docker-only and assumes a Debian/Ubuntu host: `setup_host.sh` installs
 Docker CE pinned to 28.x, sysbox-runc, and postfix via `apt`. This fork runs the same

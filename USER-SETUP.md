@@ -250,3 +250,30 @@ venv is that two projects can disagree about versions.
 Full detail, including why `sudo apt install` is not an option on the shared server,
 is in [CONFIG.md](CONFIG.md#installing-packages).
 
+
+### Updating an existing sandbox
+
+If you provisioned your account before the repository was renamed to `warp-sandbox-podman` and the default branch moved to `main`, you'll need to update the shared server checkout to pull in new changes (like newly seeded default repositories).
+
+1. **Update the shared checkout:** (Run this on the shared VM, not in the container)
+   ```bash
+   cd /mnt/sandbox/repo
+   git remote set-url origin https://github.com/broadinstitute/warp-sandbox-podman.git
+   git fetch origin
+   git branch -m podman-nobara main 2>/dev/null || true
+   git branch -u origin/main main
+   git pull
+   ```
+
+2. **Re-provision to get new repositories:**
+   Running the provisioning script again is safe and idempotent. It will skip over `warp` and `warp-tools` if you already have them, and clone any newly added repositories (like `optimus_starsolo_multiome`):
+   ```bash
+   cd /mnt/sandbox/repo
+   ./scripts/provision-sandbox-user.sh
+   ```
+
+3. **Rebuild the host fiss-mcp venv:**
+   ```bash
+   source /mnt/sandbox/users/$USER/env.$USER.sh
+   ./setup_host.sh
+   ```
