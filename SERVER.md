@@ -230,7 +230,7 @@ Put the checkout where every user can read it, then build once:
 # your own GitHub credentials and root never needs any.
 sudo mkdir -p /mnt/sandbox/repo
 sudo chown "$USER:$USER" /mnt/sandbox/repo
-git clone https://github.com/broadinstitute/code-sandbox-podman /mnt/sandbox/repo
+git clone https://github.com/broadinstitute/warp-sandbox-podman /mnt/sandbox/repo
 chmod -R a+rX /mnt/sandbox/repo
 
 cd /mnt/sandbox/repo

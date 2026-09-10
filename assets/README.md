@@ -7,7 +7,7 @@
 
       magick seal_sandbox-master.png -resize 1200x -strip seal_sandbox.png
 
-* **`code-sandbox-podman-logo.svg`** — an unreferenced 2.7 KB scalable
+* **`warp-sandbox-podman-logo.svg`** — an unreferenced 2.7 KB scalable
   alternative: a seal balancing a container box in a broken sandbox frame.
   Kept for favicons, docs, or a dark-theme variant. Uses mid-tone fills only,
   so it reads on both light and dark backgrounds.

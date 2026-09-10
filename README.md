@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/seal_sandbox.png" alt="code-sandbox-podman" width="600">
+  <img src="assets/seal_sandbox.png" alt="warp-sandbox-podman" width="600">
 </p>
 
-# code-sandbox-podman
+# warp-sandbox-podman
 
 A **rootless [podman](https://podman.io/)** sandbox for running a coding agent
 with filesystem isolation. The container sees a workspace directory you choose
