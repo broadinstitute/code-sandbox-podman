@@ -187,7 +187,7 @@ echo "=== workspace repos ==="
 #
 # Set CLAUDE_SANDBOX_SEED_REPOS to a space-separated list of clone URLs to change
 # this, or to the empty string to skip cloning entirely.
-SEED_REPOS="${CLAUDE_SANDBOX_SEED_REPOS-https://github.com/broadinstitute/warp https://github.com/broadinstitute/warp-tools}"
+SEED_REPOS="${CLAUDE_SANDBOX_SEED_REPOS-https://github.com/broadinstitute/warp https://github.com/broadinstitute/warp-tools https://github.com/broadinstitute/optimus_starsolo_multiome}"
 
 if [[ -z "${SEED_REPOS// /}" ]]; then
     ok "CLAUDE_SANDBOX_SEED_REPOS is empty — skipping repo clone"
@@ -203,7 +203,7 @@ else
         # Non-fatal: a network hiccup or a repo that has gone private must not
         # abort provisioning, because everything above it has already succeeded and
         # a user can clone by hand.
-        if git clone --quiet "$url" "$dest"; then
+        if env GIT_TERMINAL_PROMPT=0 git clone --quiet "$url" "$dest"; then
             ok "cloned workspace/${name} ($(du -sh "$dest" | cut -f1), branch $(git -C "$dest" rev-parse --abbrev-ref HEAD))"
         else
             warn "could not clone ${url} — clone it by hand into ${USER_ROOT}/workspace"
