@@ -93,6 +93,8 @@ gh auth setup-git                              # REQUIRED, separate step
 git config --get-all credential.helper         # must print: !/usr/bin/gh auth git-credential
 ```
 
+(When prompted for device activation, open [https://github.com/login/device](https://github.com/login/device) on your laptop and paste the code.)
+
 `gh auth login` gives *gh* a token; it does not necessarily configure *git*. Skip
 `setup-git` and `git push` falls back to asking for a password, which GitHub no
 longer accepts. Verify with the `credential.helper` line rather than finding out
